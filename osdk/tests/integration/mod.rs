@@ -47,7 +47,7 @@ fn build_with_conditional_manifest() {
 }
 
 fn create_osdk_kernel(name: &str, current_dir: &str) {
-    let output = cargo_osdk(&["new", "--kernel", name])
+    let output = cargo_osdk(["new", "--kernel", name])
         .current_dir(current_dir)
         .output()
         .unwrap();
@@ -70,7 +70,7 @@ fn create_osdk_kernel_with_features(name: &str, features: &[&str], current_dir: 
 }
 
 fn cargo_osdk_build<P: AsRef<Path>>(current_dir: P, args: &[&str]) {
-    let mut command = cargo_osdk(&["build"]);
+    let mut command = cargo_osdk(["build"]);
     command.args(args);
     command.current_dir(current_dir);
     let output = command.output().unwrap();

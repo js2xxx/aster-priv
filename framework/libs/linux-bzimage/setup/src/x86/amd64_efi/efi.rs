@@ -17,10 +17,11 @@ use super::{
 #[allow(unused_variables)]
 #[allow(clippy::diverging_sub_expression)]
 #[export_name = "efi_stub_entry"]
-extern "sysv64" fn efi_stub_entry(handle: Handle, mut system_table: SystemTable<Boot>) -> ! {
+extern "sysv64" fn efi_stub_entry(handle: Handle, system_table: SystemTable<Boot>) -> ! {
     unsafe {
         system_table.boot_services().set_image_handle(handle);
     }
+    #[cfg(target_os = "none")]
     uefi_services::init(&mut system_table).unwrap();
 
     let boot_params_ptr = todo!("Use EFI boot services to fill boot params");
@@ -31,12 +32,13 @@ extern "sysv64" fn efi_stub_entry(handle: Handle, mut system_table: SystemTable<
 #[export_name = "efi_handover_entry"]
 extern "sysv64" fn efi_handover_entry(
     handle: Handle,
-    mut system_table: SystemTable<Boot>,
+    system_table: SystemTable<Boot>,
     boot_params: *mut BootParams,
 ) -> ! {
     unsafe {
         system_table.boot_services().set_image_handle(handle);
     }
+    #[cfg(target_os = "none")]
     uefi_services::init(&mut system_table).unwrap();
 
     efi_phase_boot(handle, system_table, boot_params)
@@ -53,12 +55,15 @@ fn efi_phase_boot(
     // Safety: this is the right time to apply relocations.
     unsafe { apply_rela_dyn_relocations() };
 
+    #[cfg(target_os = "none")]
     uefi_services::println!("[EFI stub] Relocations applied.");
 
+    #[cfg(target_os = "none")]
     uefi_services::println!("[EFI stub] Loading payload.");
     let payload = unsafe { crate::get_payload(&*boot_params_ptr) };
     crate::loader::load_elf(payload);
 
+    #[cfg(target_os = "none")]
     uefi_services::println!("[EFI stub] Exiting EFI boot services.");
     let memory_type = {
         let boot_services = system_table.boot_services();
