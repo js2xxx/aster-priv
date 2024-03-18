@@ -129,6 +129,7 @@ pub fn call_aster_main() -> ! {
     }
 }
 
+#[cfg(ktest)]
 fn run_ktests(test_whitelist: Option<&[&str]>, crate_whitelist: Option<&[&str]>) -> ! {
     use alloc::{boxed::Box, string::ToString};
     use core::any::Any;

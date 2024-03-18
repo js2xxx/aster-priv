@@ -7,10 +7,7 @@ use core::ffi::c_void;
 
 use log::error;
 
-use crate::{
-    arch::qemu::{exit_qemu, QemuExitCode},
-    early_print, early_println,
-};
+use crate::{early_print, early_println};
 
 extern crate cfg_if;
 extern crate gimli;
@@ -35,20 +32,15 @@ pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
         line: info.location().unwrap().line() as usize,
         col: info.location().unwrap().column() as usize,
     };
+    early_println!("{}", info);
+    early_println!("printing stack trace:");
+    print_stack_trace();
     // Throw an exception and expecting it to be caught.
     begin_panic(Box::new(throw_info.clone()));
     // If the exception is not caught (e.g. by ktest) and resumed,
     // then print the information and abort.
     error!("Uncaught panic!");
-    early_println!("{}", info);
-    early_println!("printing stack trace:");
-    print_stack_trace();
-    abort();
-}
-
-// Aborts the QEMU
-pub fn abort() -> ! {
-    exit_qemu(QemuExitCode::Failed);
+    crate::abort();
 }
 
 fn print_stack_trace() {

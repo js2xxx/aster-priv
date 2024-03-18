@@ -34,6 +34,7 @@ pub mod cpu;
 mod error;
 pub mod io_mem;
 pub mod logger;
+#[cfg(target_os = "none")]
 pub mod panicking;
 pub mod prelude;
 pub mod sync;
@@ -68,6 +69,11 @@ pub fn init() {
     arch::after_all_init();
     bus::init();
     invoke_ffi_init_funcs();
+}
+
+// Aborts the QEMU
+pub fn abort() -> ! {
+    crate::arch::qemu::exit_qemu(crate::arch::qemu::QemuExitCode::Failed);
 }
 
 fn invoke_ffi_init_funcs() {
