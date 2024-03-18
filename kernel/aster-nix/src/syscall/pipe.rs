@@ -3,9 +3,9 @@
 use super::{SyscallReturn, SYS_PIPE2};
 use crate::{
     fs::{
-        file_table::{FdFlags, FileDescripter},
+        file_table::FileDescripter,
         pipe::{PipeReader, PipeWriter},
-        utils::{Channel, CreationFlags, StatusFlags},
+        utils::{Channel, StatusFlags},
     },
     log_syscall_entry,
     prelude::*,
@@ -27,16 +27,11 @@ pub fn sys_pipe2(fds: Vaddr, flags: u32) -> Result<SyscallReturn> {
     };
     let pipe_reader = Arc::new(reader);
     let pipe_writer = Arc::new(writer);
-    let fd_flags = if CreationFlags::from_bits_truncate(flags).contains(CreationFlags::O_CLOEXEC) {
-        FdFlags::CLOEXEC
-    } else {
-        FdFlags::empty()
-    };
 
     let current = current!();
     let mut file_table = current.file_table().lock();
-    pipe_fds.reader_fd = file_table.insert(pipe_reader, fd_flags);
-    pipe_fds.writer_fd = file_table.insert(pipe_writer, fd_flags);
+    pipe_fds.reader_fd = file_table.insert(pipe_reader);
+    pipe_fds.writer_fd = file_table.insert(pipe_writer);
     debug!("pipe_fds: {:?}", pipe_fds);
     write_val_to_user(fds, &pipe_fds)?;
 

@@ -2,7 +2,7 @@
 
 use super::{SyscallReturn, SYS_SOCKETPAIR};
 use crate::{
-    fs::file_table::{FdFlags, FileDescripter},
+    fs::file_table::FileDescripter,
     log_syscall_entry,
     net::socket::unix::UnixStreamSocket,
     prelude::*,
@@ -37,14 +37,9 @@ pub fn sys_socketpair(domain: i32, type_: i32, protocol: i32, sv: Vaddr) -> Resu
 
     let socket_fds = {
         let current = current!();
-        let mut file_table = current.file_table().lock();
-        let fd_flags = if sock_flags.contains(SockFlags::SOCK_CLOEXEC) {
-            FdFlags::CLOEXEC
-        } else {
-            FdFlags::empty()
-        };
-        let fd_a = file_table.insert(socket_a, fd_flags);
-        let fd_b = file_table.insert(socket_b, fd_flags);
+        let mut filetable = current.file_table().lock();
+        let fd_a = filetable.insert(socket_a);
+        let fd_b = filetable.insert(socket_b);
         SocketFds(fd_a, fd_b)
     };
 

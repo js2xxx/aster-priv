@@ -1,8 +1,16 @@
 // SPDX-License-Identifier: MPL-2.0
 
 pub mod nice;
-mod priority_scheduler;
+mod scheduler;
 
-// There may be multiple scheduling policies in the system,
-// and subsequent schedulers can be placed under this module.
-pub use self::priority_scheduler::init;
+use alloc::boxed::Box;
+
+use aster_frame::task::set_scheduler;
+use scheduler::fifo_with_rt_preempt::PreemptiveFIFOScheduler as Sched;
+// use scheduler::completely_fair_scheduler::CompletelyFairScheduler as Sched;
+
+pub fn init() {
+    let sched = Box::new(Sched::new());
+    let sched = Box::<Sched>::leak(sched);
+    set_scheduler(sched);
+}

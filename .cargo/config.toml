@@ -1,0 +1,2 @@
+[alias]
+osdk = "run --release --package cargo-osdk -- osdk"

@@ -1,11 +1,3 @@
 {
-    "rust-analyzer.check.allTargets": false,
-    "rust-analyzer.cargo.target": "x86_64-unknown-none",
-    "rust-analyzer.check.extraArgs": [
-        "--target",
-        "x86_64-unknown-none",
-        "-Zbuild-std=core,alloc,compiler_builtins",
-        "-Zbuild-std-features=compiler-builtins-mem"
-    ],
     "rust-analyzer.showUnlinkedFileNotification": false
 }

@@ -7,7 +7,7 @@ use crate::{
     events::IoEvents,
     fs::{
         epoll::{EpollCtl, EpollEvent, EpollFile, EpollFlags},
-        file_table::{FdFlags, FileDescripter},
+        file_table::FileDescripter,
         utils::CreationFlags,
     },
     log_syscall_entry,
@@ -26,13 +26,13 @@ pub fn sys_epoll_create1(flags: u32) -> Result<SyscallReturn> {
     log_syscall_entry!(SYS_EPOLL_CREATE1);
     debug!("flags = 0x{:x}", flags);
 
-    let fd_flags = {
+    let close_on_exec = {
         let flags = CreationFlags::from_bits(flags)
             .ok_or_else(|| Error::with_message(Errno::EINVAL, "invalid flags"))?;
         if flags == CreationFlags::empty() {
-            FdFlags::empty()
+            false
         } else if flags == CreationFlags::O_CLOEXEC {
-            FdFlags::CLOEXEC
+            true
         } else {
             // Only O_CLOEXEC is valid
             return_errno_with_message!(Errno::EINVAL, "invalid flags");
@@ -42,7 +42,7 @@ pub fn sys_epoll_create1(flags: u32) -> Result<SyscallReturn> {
     let current = current!();
     let epoll_file: Arc<EpollFile> = EpollFile::new();
     let mut file_table = current.file_table().lock();
-    let fd = file_table.insert(epoll_file, fd_flags);
+    let fd = file_table.insert(epoll_file);
     Ok(SyscallReturn::Return(fd as _))
 }
 

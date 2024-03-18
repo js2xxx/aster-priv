@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use align_ext::AlignExt;
 use aster_frame::{
     sync::WaitQueue,
     vm::{VmFrame, VmReader, VmSegment, VmWriter},
@@ -359,18 +358,20 @@ pub enum BioStatus {
 #[derive(Debug, Clone)]
 pub struct BioSegment {
     /// The contiguous pages on which this segment resides.
-    pages: VmSegment,
-    /// The starting offset (in bytes) within the first page.
-    /// The offset should always be aligned to the sector size and
-    /// must not exceed the size of a single page.
+    pages: Pages,
+    /// The offset (in bytes) relative to the first page.
     offset: AlignedUsize<SECTOR_SIZE>,
-    /// The total length (in bytes).
-    /// The length can span multiple pages and should be aligned to
-    /// the sector size.
+    // The length (in bytes), may cross pages.
     len: AlignedUsize<SECTOR_SIZE>,
 }
 
 const SECTOR_SIZE: u16 = super::SECTOR_SIZE as u16;
+
+#[derive(Debug, Clone)]
+enum Pages {
+    Frame(VmFrame),
+    Segment(VmSegment),
+}
 
 impl<'a> BioSegment {
     /// Constructs a new `BioSegment` from `VmSegment`.
@@ -378,8 +379,8 @@ impl<'a> BioSegment {
         assert!(offset + len <= segment.nbytes());
 
         Self {
-            pages: segment.range(frame_range(&(offset..offset + len))),
-            offset: AlignedUsize::<SECTOR_SIZE>::new(offset % super::BLOCK_SIZE).unwrap(),
+            pages: Pages::Segment(segment),
+            offset: AlignedUsize::<SECTOR_SIZE>::new(offset).unwrap(),
             len: AlignedUsize::<SECTOR_SIZE>::new(len).unwrap(),
         }
     }
@@ -389,7 +390,7 @@ impl<'a> BioSegment {
         assert!(offset + len <= super::BLOCK_SIZE);
 
         Self {
-            pages: VmSegment::from(frame),
+            pages: Pages::Frame(frame),
             offset: AlignedUsize::<SECTOR_SIZE>::new(offset).unwrap(),
             len: AlignedUsize::<SECTOR_SIZE>::new(len).unwrap(),
         }
@@ -405,37 +406,23 @@ impl<'a> BioSegment {
         self.len.value()
     }
 
-    /// Returns the offset (in bytes) within the first page.
-    pub fn offset(&self) -> usize {
-        self.offset.value()
-    }
-
-    /// Returns the contiguous pages on which this segment resides.
-    pub fn pages(&self) -> &VmSegment {
-        &self.pages
-    }
-
     /// Returns a reader to read data from it.
     pub fn reader(&'a self) -> VmReader<'a> {
-        self.pages
-            .reader()
-            .skip(self.offset.value())
-            .limit(self.len.value())
+        let reader = match &self.pages {
+            Pages::Segment(segment) => segment.reader(),
+            Pages::Frame(frame) => frame.reader(),
+        };
+        reader.skip(self.offset.value()).limit(self.len.value())
     }
 
     /// Returns a writer to write data into it.
     pub fn writer(&'a self) -> VmWriter<'a> {
-        self.pages
-            .writer()
-            .skip(self.offset.value())
-            .limit(self.len.value())
+        let writer = match &self.pages {
+            Pages::Segment(segment) => segment.writer(),
+            Pages::Frame(frame) => frame.writer(),
+        };
+        writer.skip(self.offset.value()).limit(self.len.value())
     }
-}
-
-fn frame_range(byte_range: &Range<usize>) -> Range<usize> {
-    let start = byte_range.start.align_down(super::BLOCK_SIZE);
-    let end = byte_range.end.align_up(super::BLOCK_SIZE);
-    (start / super::BLOCK_SIZE)..(end / super::BLOCK_SIZE)
 }
 
 /// An aligned unsigned integer number.
