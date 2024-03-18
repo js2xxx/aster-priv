@@ -9,16 +9,14 @@ use core::{
     sync::atomic::{AtomicIsize, Ordering::*},
 };
 
-use aster_frame::task::{set_scheduler, ReadPriority, Scheduler, Task, TaskAdapter};
+use aster_frame::{
+    arch::current_tick,
+    sched_debug,
+    task::{current_task, NeedResched, ReadPriority, Scheduler, Task, TaskAdapter},
+};
 use intrusive_collections::LinkedList;
 
 use crate::{prelude::*, sched::nice::Nice};
-
-pub fn init() {
-    let completely_fair_scheduler = Box::new(CompletelyFairScheduler::new());
-    let scheduler = Box::<CompletelyFairScheduler>::leak(completely_fair_scheduler);
-    set_scheduler(scheduler);
-}
 
 pub fn nice_to_weight(nice: Nice) -> isize {
     const NICE_TO_WEIGHT: [isize; 40] = [
@@ -33,51 +31,53 @@ pub fn nice_to_weight(nice: Nice) -> isize {
 #[derive(Clone)]
 pub struct VRuntime {
     vruntime: isize,
-    delta: isize,
-    nice: Nice,
+    start: u64,
+    weight: isize,
 
     task: Arc<Task>,
 }
 
 impl VRuntime {
     pub fn new(scheduler: &CompletelyFairScheduler, task: Arc<Task>) -> VRuntime {
+        let nice = Nice::new(task.priority().as_nice().unwrap() + 20);
+        sched_debug!("prio = {:?}, nice = {nice:?}", task.priority());
         VRuntime {
             // BUG: Keeping creating new tasks can cause starvation.
             vruntime: scheduler.min_vruntime.load(SeqCst),
-            delta: 0,
-            nice: Nice::new(task.priority().as_nice().unwrap()),
+            start: current_tick(),
+            weight: nice_to_weight(nice),
             task,
         }
     }
 
-    pub fn weight(&self) -> isize {
-        nice_to_weight(self.nice)
+    fn get_with_cur(&self, cur: u64) -> isize {
+        self.vruntime + (((cur - self.start) as isize) * nice_to_weight(Nice::new(0)) / self.weight)
     }
 
     pub fn get(&self) -> isize {
-        self.vruntime + (self.delta * 1024 / self.weight())
+        self.get_with_cur(self.start)
     }
 
-    pub fn set(&mut self, vruntime: isize) {
-        self.vruntime = vruntime;
+    pub fn update(&mut self) {
+        let cur = current_tick();
+        self.vruntime = self.get_with_cur(cur);
+        self.start = cur;
     }
 
     pub fn set_nice(&mut self, nice: Nice) {
-        self.set(self.get());
-        self.delta = 0;
-        self.nice = nice;
+        self.update();
+        self.weight = nice_to_weight(nice);
     }
 
     pub fn tick(&mut self) {
-        self.delta += 1;
-        self.set(self.get());
+        self.update();
     }
 }
 
 impl Ord for VRuntime {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse the result for the implementation of min-heap.
-        other.get().cmp(&self.get())
+        (other.get().cmp(&self.get())).then_with(|| other.start.cmp(&self.start))
     }
 }
 
@@ -142,6 +142,8 @@ impl Scheduler for CompletelyFairScheduler {
                 .lock_irq_disabled()
                 .push_back(task.clone());
         } else {
+            task.set_need_resched(false);
+
             // BUG: address is not a strictly unique key
             let key = key_of(&task);
 
@@ -150,9 +152,15 @@ impl Scheduler for CompletelyFairScheduler {
                 .lock_irq_disabled()
                 .remove(&key)
                 .unwrap_or_else(|| VRuntime::new(self, task));
+            let start = vruntime.start;
+            let v = vruntime.vruntime;
+            let w = vruntime.weight;
+
             let mut heap = self.normal_tasks.lock_irq_disabled();
             heap.push(vruntime);
             self.min_vruntime.store(heap.peek().unwrap().get(), SeqCst);
+
+            sched_debug!("CFS: pushing {key:#x}, start = {start}, v = {v}, w = {w}");
         }
     }
 
@@ -173,6 +181,12 @@ impl Scheduler for CompletelyFairScheduler {
         };
         let task = vruntime.task.clone();
         let key = key_of(&task);
+        sched_debug!(
+            "CFS: picking {key:#x}, start = {}, v = {}, w = {}",
+            vruntime.start,
+            vruntime.vruntime,
+            vruntime.weight,
+        );
         self.vruntimes.lock_irq_disabled().insert(key, vruntime);
         Some(task)
     }
@@ -182,21 +196,62 @@ impl Scheduler for CompletelyFairScheduler {
     }
 
     fn should_preempt_cur_task(&self) -> bool {
-        let mut vruntimes = self.vruntimes.lock_irq_disabled();
-        if let Some(mut cur) = vruntimes.first_entry() {
-            return cur.get_mut().get() > self.min_vruntime.load(SeqCst);
+        if let Some(cur) = current_task() {
+            let key = key_of(&cur);
+
+            let vruntimes = self.vruntimes.lock_irq_disabled();
+            if let Some(vruntime) = vruntimes.get(&key) {
+                return vruntime.get() > self.min_vruntime.load(SeqCst);
+            }
         }
         false
     }
 
     fn tick_cur_task(&self) {
-        let mut vruntimes = self.vruntimes.lock_irq_disabled();
-        if let Some(mut cur) = vruntimes.first_entry() {
-            cur.get_mut().tick()
+        if let Some(cur) = current_task() {
+            let key = key_of(&cur);
+            let mut vruntimes = self.vruntimes.lock_irq_disabled();
+            if let Some(vruntime) = vruntimes.get_mut(&key) {
+                vruntime.tick();
+                sched_debug!(
+                    "CFS: updating {key:#x}, start = {}, v = {}, w = {}",
+                    vruntime.start,
+                    vruntime.vruntime,
+                    vruntime.weight,
+                );
+            }
         }
     }
 
     fn prepare_to_yield_to(&self, task: Arc<Task>) {
-        let _ = task;
+        self.prepare_to_yield_cur_task();
+
+        if task.is_real_time() {
+            self.real_time_tasks
+                .lock_irq_disabled()
+                .push_back(task.clone());
+        } else {
+            task.set_need_resched(false);
+
+            // BUG: address is not a strictly unique key
+            let key = key_of(&task);
+
+            let mut vruntime = self
+                .vruntimes
+                .lock_irq_disabled()
+                .remove(&key)
+                .unwrap_or_else(|| VRuntime::new(self, task));
+            vruntime.vruntime = 0;
+
+            let start = vruntime.start;
+            let v = vruntime.vruntime;
+            let w = vruntime.weight;
+
+            let mut heap = self.normal_tasks.lock_irq_disabled();
+            heap.push(vruntime);
+            self.min_vruntime.store(heap.peek().unwrap().get(), SeqCst);
+
+            sched_debug!("CFS: pushing {key:#x}, start = {start}, v = {v}, w = {w}");
+        }
     }
 }
