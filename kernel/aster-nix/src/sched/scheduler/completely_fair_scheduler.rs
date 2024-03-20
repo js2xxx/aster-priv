@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use alloc::{
-    collections::{BTreeMap, BinaryHeap},
+    collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
 use core::{
@@ -38,12 +38,11 @@ pub struct VRuntime {
 }
 
 impl VRuntime {
-    pub fn new(scheduler: &CompletelyFairScheduler, task: Arc<Task>) -> VRuntime {
+    pub fn new(task: Arc<Task>) -> VRuntime {
         let nice = Nice::new(task.priority().as_nice().unwrap() + 20);
         sched_debug!("prio = {:?}, nice = {nice:?}", task.priority());
         VRuntime {
-            // BUG: Keeping creating new tasks can cause starvation.
-            vruntime: scheduler.min_vruntime.load(SeqCst),
+            vruntime: 0,
             start: current_tick(),
             weight: nice_to_weight(nice),
             task,
@@ -76,8 +75,7 @@ impl VRuntime {
 
 impl Ord for VRuntime {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Reverse the result for the implementation of min-heap.
-        (other.get().cmp(&self.get())).then_with(|| other.start.cmp(&self.start))
+        (self.get().cmp(&other.get())).then_with(|| self.start.cmp(&other.start))
     }
 }
 
@@ -95,6 +93,8 @@ impl PartialEq for VRuntime {
     }
 }
 
+const BANDWIDTH: isize = 500;
+
 /// The Completely Fair Scheduler(CFS)
 ///
 /// Real-time tasks are placed in the `real_time_tasks` queue and
@@ -106,11 +106,10 @@ pub struct CompletelyFairScheduler {
     real_time_tasks: SpinLock<LinkedList<TaskAdapter>>,
 
     min_vruntime: AtomicIsize,
-    // TODO: `vruntimes` currently never shrinks.
     /// `VRuntime`'s created are stored here for looking up.
     vruntimes: SpinLock<BTreeMap<usize, VRuntime>>,
     /// Tasks with a priority greater than or equal to 100 are regarded as normal tasks.
-    normal_tasks: SpinLock<BinaryHeap<VRuntime>>,
+    normal_tasks: SpinLock<BTreeSet<VRuntime>>,
 }
 
 impl CompletelyFairScheduler {
@@ -120,7 +119,50 @@ impl CompletelyFairScheduler {
 
             min_vruntime: AtomicIsize::new(0),
             vruntimes: SpinLock::new(BTreeMap::new()),
-            normal_tasks: SpinLock::new(BinaryHeap::new()),
+            normal_tasks: SpinLock::new(BTreeSet::new()),
+        }
+    }
+
+    fn push(&self, task: Arc<Task>, force_yield: bool) {
+        if task.is_real_time() {
+            self.real_time_tasks
+                .lock_irq_disabled()
+                .push_back(task.clone());
+        } else {
+            task.set_need_resched(false);
+
+            // BUG: address is not a strictly unique key
+            let key = key_of(&task);
+
+            let mut vruntime = self
+                .vruntimes
+                .lock_irq_disabled()
+                .remove(&key)
+                .unwrap_or_else(|| VRuntime::new(task));
+            vruntime.vruntime = if force_yield {
+                0
+            } else {
+                let min_boundary = (self.min_vruntime.load(Relaxed) - BANDWIDTH).max(0);
+                let delta = (min_boundary - vruntime.vruntime).max(1);
+                vruntime.vruntime + (delta >> 2) + (delta >> 3)
+            };
+
+            let start = vruntime.start;
+            let v = vruntime.vruntime;
+            let w = vruntime.weight;
+
+            let mut set = self.normal_tasks.lock_irq_disabled();
+            set.insert(vruntime);
+            self.min_vruntime.store(set.first().unwrap().get(), Relaxed);
+
+            sched_debug!(
+                "CFS: {} {key:#x}, start = {start}, v = {v}, w = {w}",
+                if force_yield {
+                    "yielding to"
+                } else {
+                    "pushing"
+                }
+            );
         }
     }
 }
@@ -137,31 +179,7 @@ fn key_of(task: &Arc<Task>) -> usize {
 
 impl Scheduler for CompletelyFairScheduler {
     fn enqueue(&self, task: Arc<Task>) {
-        if task.is_real_time() {
-            self.real_time_tasks
-                .lock_irq_disabled()
-                .push_back(task.clone());
-        } else {
-            task.set_need_resched(false);
-
-            // BUG: address is not a strictly unique key
-            let key = key_of(&task);
-
-            let vruntime = self
-                .vruntimes
-                .lock_irq_disabled()
-                .remove(&key)
-                .unwrap_or_else(|| VRuntime::new(self, task));
-            let start = vruntime.start;
-            let v = vruntime.vruntime;
-            let w = vruntime.weight;
-
-            let mut heap = self.normal_tasks.lock_irq_disabled();
-            heap.push(vruntime);
-            self.min_vruntime.store(heap.peek().unwrap().get(), SeqCst);
-
-            sched_debug!("CFS: pushing {key:#x}, start = {start}, v = {v}, w = {w}");
-        }
+        self.push(task, false)
     }
 
     fn pick_next_task(&self) -> Option<Arc<Task>> {
@@ -172,10 +190,10 @@ impl Scheduler for CompletelyFairScheduler {
         drop(real_time_tasks);
 
         let vruntime = {
-            let mut heap = self.normal_tasks.lock_irq_disabled();
-            let ret = heap.pop()?;
-            if let Some(peek) = heap.peek() {
-                self.min_vruntime.store(peek.get(), SeqCst);
+            let mut set = self.normal_tasks.lock_irq_disabled();
+            let ret = set.pop_first()?;
+            if let Some(peek) = set.first() {
+                self.min_vruntime.store(peek.get(), Relaxed);
             }
             ret
         };
@@ -197,18 +215,26 @@ impl Scheduler for CompletelyFairScheduler {
 
     fn should_preempt_cur_task(&self) -> bool {
         if let Some(cur) = current_task() {
+            if cur.is_real_time() {
+                return true;
+            }
             let key = key_of(&cur);
 
             let vruntimes = self.vruntimes.lock_irq_disabled();
-            if let Some(vruntime) = vruntimes.get(&key) {
-                return vruntime.get() > self.min_vruntime.load(SeqCst);
-            }
+            return match vruntimes.get(&key) {
+                Some(vruntime) => vruntime.get() > self.min_vruntime.load(Relaxed),
+                None => true,
+            };
         }
         false
     }
 
     fn tick_cur_task(&self) {
         if let Some(cur) = current_task() {
+            if cur.is_real_time() {
+                return;
+            }
+
             let key = key_of(&cur);
             let mut vruntimes = self.vruntimes.lock_irq_disabled();
             if let Some(vruntime) = vruntimes.get_mut(&key) {
@@ -225,33 +251,6 @@ impl Scheduler for CompletelyFairScheduler {
 
     fn prepare_to_yield_to(&self, task: Arc<Task>) {
         self.prepare_to_yield_cur_task();
-
-        if task.is_real_time() {
-            self.real_time_tasks
-                .lock_irq_disabled()
-                .push_back(task.clone());
-        } else {
-            task.set_need_resched(false);
-
-            // BUG: address is not a strictly unique key
-            let key = key_of(&task);
-
-            let mut vruntime = self
-                .vruntimes
-                .lock_irq_disabled()
-                .remove(&key)
-                .unwrap_or_else(|| VRuntime::new(self, task));
-            vruntime.vruntime = 0;
-
-            let start = vruntime.start;
-            let v = vruntime.vruntime;
-            let w = vruntime.weight;
-
-            let mut heap = self.normal_tasks.lock_irq_disabled();
-            heap.push(vruntime);
-            self.min_vruntime.store(heap.peek().unwrap().get(), SeqCst);
-
-            sched_debug!("CFS: pushing {key:#x}, start = {start}, v = {v}, w = {w}");
-        }
+        self.push(task, true)
     }
 }
