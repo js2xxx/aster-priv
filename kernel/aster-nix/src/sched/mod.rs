@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#![warn(unused_variables)]
+
 pub mod nice;
 mod scheduler;
 

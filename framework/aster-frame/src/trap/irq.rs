@@ -116,6 +116,10 @@ pub fn disable_local() -> DisabledLocalIrqGuard {
     DisabledLocalIrqGuard::new()
 }
 
+pub fn is_local_enabled() -> bool {
+    irq::is_local_enabled()
+}
+
 /// A guard for disabled local IRQs.
 pub struct DisabledLocalIrqGuard {
     was_enabled: bool,

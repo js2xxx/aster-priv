@@ -12,6 +12,7 @@ use core::{
 use aster_frame::{
     arch::current_tick,
     task::{current_task, NeedResched, ReadPriority, Scheduler, Task, TaskAdapter},
+    trap::{disable_local, is_local_enabled},
 };
 use intrusive_collections::LinkedList;
 
@@ -129,24 +130,20 @@ impl CompletelyFairScheduler {
                 .push_back(task.clone());
         } else {
             task.set_need_resched(false);
+            let _irq = disable_local();
 
             // BUG: address is not a strictly unique key
             let key = key_of(&task);
 
-            let vruntime = self
-                .vruntimes
-                .lock_irq_disabled()
-                .remove(&key)
-                .unwrap_or_else(|| VRuntime::new(task));
-            // vruntime.vruntime = if force_yield {
-            //     0
-            // } else {
+            let opt = self.vruntimes.lock().remove(&key);
+            let vruntime = opt.unwrap_or_else(|| VRuntime::new(task));
+            // if !force_yield {
             //     let min_boundary = (self.min_vruntime.load(Relaxed) - BANDWIDTH).max(0);
             //     let delta = (min_boundary - vruntime.vruntime).max(1);
-            //     vruntime.vruntime + (delta.ilog2() as isize)
-            // };
+            //     vruntime.vruntime += delta.ilog2() as isize
+            // }
 
-            let mut set = self.normal_tasks.lock_irq_disabled();
+            let mut set = self.normal_tasks.lock();
             set.insert(vruntime);
             self.min_vruntime.store(set.first().unwrap().get(), Relaxed);
         }
@@ -169,23 +166,27 @@ impl Scheduler for CompletelyFairScheduler {
     }
 
     fn pick_next_task(&self) -> Option<Arc<Task>> {
-        let mut real_time_tasks = self.real_time_tasks.lock_irq_disabled();
+        debug_assert!(!is_local_enabled());
+
+        let mut real_time_tasks = self.real_time_tasks.lock();
         if !real_time_tasks.is_empty() {
             return real_time_tasks.pop_front();
         }
         drop(real_time_tasks);
 
         let vruntime = {
-            let mut set = self.normal_tasks.lock_irq_disabled();
+            let mut set = self.normal_tasks.lock();
             let ret = set.pop_first()?;
-            if let Some(peek) = set.first() {
-                self.min_vruntime.store(peek.get(), Relaxed);
-            }
+            let min = match set.first() {
+                Some(peek) => peek.get(),
+                None => 0,
+            };
+            self.min_vruntime.store(min, Relaxed);
             ret
         };
         let task = vruntime.task.clone();
         let key = key_of(&task);
-        self.vruntimes.lock_irq_disabled().insert(key, vruntime);
+        self.vruntimes.lock().insert(key, vruntime);
         Some(task)
     }
 
@@ -200,8 +201,8 @@ impl Scheduler for CompletelyFairScheduler {
             }
             let key = key_of(&cur);
 
-            let vruntimes = self.vruntimes.lock_irq_disabled();
-            return vruntimes[&key].get() > self.min_vruntime.load(Relaxed);
+            debug_assert!(!is_local_enabled());
+            return self.vruntimes.lock()[&key].get() > self.min_vruntime.load(Relaxed);
         }
         false
     }
@@ -213,15 +214,17 @@ impl Scheduler for CompletelyFairScheduler {
             }
 
             let key = key_of(&cur);
-            let mut vruntimes = self.vruntimes.lock_irq_disabled();
+
+            debug_assert!(!is_local_enabled());
+            let mut vruntimes = self.vruntimes.lock();
             let vruntime = vruntimes.get_mut(&key).unwrap();
             vruntime.tick();
 
             if vruntime.vruntime > self.min_vruntime.load(Relaxed) {
                 cur.set_need_resched(true);
             }
-            let cur = vruntime.vruntime;
-            drop(vruntimes);
+            // let cur = vruntime.vruntime;
+            // drop(vruntimes);
 
             // let cur_tick = current_tick();
             // if cur_tick > PACE.load(Relaxed) + 5000 {

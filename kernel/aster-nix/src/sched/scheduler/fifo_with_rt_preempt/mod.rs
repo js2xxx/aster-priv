@@ -41,7 +41,9 @@ impl Scheduler for PreemptiveFIFOScheduler {
         self.find_queue(&task).push_back(task);
     }
 
-    fn clear(&self, task: &Arc<Task>) {}
+    fn clear(&self, task: &Arc<Task>) {
+        let _ = task;
+    }
 
     fn pick_next_task(&self) -> Option<Arc<Task>> {
         if !self.real_time_tasks.lock().is_empty() {
