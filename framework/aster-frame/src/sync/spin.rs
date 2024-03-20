@@ -26,6 +26,10 @@ impl<T> SpinLock<T> {
             lock: AtomicBool::new(false),
         }
     }
+
+    pub fn as_ptr(&self) -> *mut T {
+        self.val.get()
+    }
 }
 
 impl<T: ?Sized> SpinLock<T> {

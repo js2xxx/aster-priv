@@ -57,6 +57,10 @@ pub fn current_tick() -> TickCount {
     TICK.load(Ordering::Acquire)
 }
 
+pub fn raw_ticks() -> u64 {
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
 fn timer_callback(trap_frame: &TrapFrame) {
     let current_ticks = TICK.fetch_add(1, Ordering::SeqCst);
 

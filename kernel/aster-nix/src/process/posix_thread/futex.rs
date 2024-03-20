@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use aster_frame::{cpu::num_cpus, sync::Waiter};
 
-use aster_frame::cpu::num_cpus;
-
-use crate::{
-    prelude::*,
-    thread::{Thread, Tid},
-    util::read_val_from_user,
-};
+use crate::{prelude::*, util::read_val_from_user};
 
 type FutexBitSet = u32;
 type FutexBucketRef = Arc<Mutex<FutexBucket>>;
@@ -278,13 +272,13 @@ impl FutexItem {
         FutexItem {
             key,
             bitset,
-            waiter: Arc::new(FutexWaiter::new()),
+            waiter: Arc::new(Waiter::new()),
         }
     }
 
     pub fn wake(&self) {
         // debug!("wake futex item, key = {:?}", self.key);
-        self.waiter.wake();
+        self.waiter.wake_up();
     }
 
     pub fn wait(&self) {
@@ -298,8 +292,7 @@ impl FutexItem {
     }
 
     pub fn batch_wake(items: &[FutexItem]) {
-        let waiters = items.iter().map(|item| item.waiter()).collect::<Vec<_>>();
-        FutexWaiter::batch_wake(&waiters);
+        items.iter().for_each(|item| item.waiter().wake_up());
     }
 }
 
@@ -386,55 +379,4 @@ pub fn futex_op_and_flags_from_u32(bits: u32) -> Result<(FutexOp, FutexFlags)> {
     Ok((op, flags))
 }
 
-type FutexWaiterRef = Arc<FutexWaiter>;
-
-#[derive(Debug)]
-struct FutexWaiter {
-    is_woken: AtomicBool,
-    tid: Tid,
-}
-
-impl PartialEq for FutexWaiter {
-    fn eq(&self, other: &Self) -> bool {
-        self.tid == other.tid
-    }
-}
-
-impl FutexWaiter {
-    pub fn new() -> Self {
-        Self {
-            is_woken: AtomicBool::new(false),
-            tid: current_thread!().tid(),
-        }
-    }
-
-    pub fn wait(&self) {
-        let current_thread = current_thread!();
-        if current_thread.tid() != self.tid {
-            return;
-        }
-        self.is_woken.store(false, Ordering::SeqCst);
-        while !self.is_woken() {
-            // debug!("futex is wait for waken, tid = {}", self.tid);
-            Thread::yield_now();
-        }
-        // debug!("futex is waken, tid = {}", self.tid);
-    }
-
-    pub fn wake(&self) {
-        if !self.is_woken() {
-            // debug!("wake up futex, tid = {}", self.tid);
-            self.is_woken.store(true, Ordering::SeqCst);
-        }
-    }
-
-    pub fn is_woken(&self) -> bool {
-        self.is_woken.load(Ordering::SeqCst)
-    }
-
-    pub fn batch_wake(waiters: &[&FutexWaiterRef]) {
-        waiters.iter().for_each(|waiter| {
-            waiter.wake();
-        });
-    }
-}
+type FutexWaiterRef = Arc<Waiter>;

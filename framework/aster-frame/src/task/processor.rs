@@ -28,8 +28,8 @@ impl Processor {
     fn idle_task_ctx_ptr(&mut self) -> *mut TaskContext {
         &mut self.idle_task_ctx as *mut _
     }
-    pub fn current(&self) -> Option<Arc<Task>> {
-        self.current.as_ref().map(Arc::clone)
+    pub fn current(&self) -> Option<&Arc<Task>> {
+        self.current.as_ref()
     }
     pub fn set_current_task(&mut self, task: Arc<Task>) {
         self.current = Some(task);
@@ -45,7 +45,13 @@ pub fn init() {
 }
 
 pub fn current_task() -> Option<Arc<Task>> {
-    CpuLocal::borrow_with(&PROCESSOR, |processor| processor.borrow().current())
+    CpuLocal::borrow_with(&PROCESSOR, |processor| {
+        processor.borrow().current().cloned()
+    })
+}
+
+pub fn with_current<T>(f: impl FnOnce(&Arc<Task>) -> T) -> Option<T> {
+    CpuLocal::borrow_with(&PROCESSOR, |processor| processor.borrow().current().map(f))
 }
 
 /// Yields execution so that another task may be scheduled.
@@ -54,7 +60,7 @@ pub fn current_task() -> Option<Arc<Task>> {
 /// Note that this method cannot be simply named "yield" as the name is
 /// a Rust keyword.
 pub fn yield_now() {
-    if current_task().is_some() {
+    if with_current(|_| {}).is_some() {
         locked_global_scheduler().prepare_to_yield_cur_task();
     }
     schedule();
@@ -62,7 +68,7 @@ pub fn yield_now() {
 
 // FIXME: remove this func after merging #632.
 pub fn yield_to(task: Arc<Task>) {
-    if current_task().is_some() {
+    if with_current(|_| {}).is_some() {
         locked_global_scheduler().prepare_to_yield_to(task);
     } else {
         add_task(task);
@@ -101,9 +107,9 @@ fn should_preempt_cur_task() -> bool {
         return false;
     }
 
-    current_task().map_or(true, |ref cur_task| {
-        !cur_task.status().is_runnable() || cur_task.need_resched()
-    }) || locked_global_scheduler().should_preempt_cur_task()
+    with_current(|cur_task| !cur_task.status().is_runnable() || cur_task.need_resched())
+        .unwrap_or(true)
+        || locked_global_scheduler().should_preempt_cur_task()
 }
 
 /// Switch to the given next task.
@@ -121,17 +127,19 @@ fn switch_to(next_task: Arc<Task>) {
 
     let current_task_ctx = CpuLocal::borrow_with(&PROCESSOR, |processor| {
         let processor = &mut processor.borrow_mut();
-        let cur_task = processor.current();
-        // Replace in advance to reduce the overhead from `CpuLocal::borrow_with`.
-        processor.set_current_task(next_task);
+        let cur_task = processor.current.replace(next_task);
 
         match cur_task {
             None => processor.idle_task_ctx_ptr(),
-            Some(ref cur_task) => {
+            Some(cur_task) => {
+                let mut inner_exclusive_access = cur_task.inner_exclusive_access();
+                let task_context = &mut inner_exclusive_access.ctx as *mut TaskContext;
+                drop(inner_exclusive_access);
+
                 if cur_task.status().is_runnable() {
-                    add_task(cur_task.clone());
+                    add_task(cur_task);
                 }
-                &mut cur_task.inner_exclusive_access().ctx as *mut TaskContext
+                task_context
             }
         }
     });
@@ -143,7 +151,7 @@ fn switch_to(next_task: Arc<Task>) {
 /// Called by the timer handler at every TICK update.
 fn scheduler_tick() {
     let disable_irq = disable_local();
-    if current_task().is_some() {
+    if with_current(|_| {}).is_some() {
         locked_global_scheduler().tick_cur_task();
     }
 }

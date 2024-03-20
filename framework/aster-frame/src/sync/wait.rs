@@ -152,13 +152,27 @@ impl WaitQueue {
     }
 }
 
-struct Waiter {
+pub struct Waiter {
     /// Whether the waiter is woken_up
     is_woken_up: AtomicBool,
     /// To respect different wait condition
     flag: WaiterFlag,
     /// The `Task` held by the waiter.
     task: Arc<Task>,
+}
+
+impl PartialEq for Waiter {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.task, &other.task)
+    }
+}
+
+impl core::fmt::Debug for Waiter {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Waiter")
+            .field(&Arc::as_ptr(&self.task))
+            .finish()
+    }
 }
 
 impl Waiter {
@@ -196,6 +210,12 @@ impl Waiter {
 
     pub fn is_exclusive(&self) -> bool {
         self.flag.contains(WaiterFlag::EXCLUSIVE)
+    }
+}
+
+impl Default for Waiter {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

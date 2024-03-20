@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MPL-2.0
+#![allow(unsafe_code)]
 
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::sync::Arc;
 use core::{
     cmp::Ordering,
     sync::atomic::{AtomicIsize, Ordering::*},
 };
 
 use aster_frame::{
-    arch::current_tick,
-    task::{current_task, NeedResched, ReadPriority, Scheduler, Task, TaskAdapter},
+    arch::raw_ticks,
+    task::{with_current, NeedResched, ReadPriority, Scheduler, Task, TaskAdapter},
     trap::{disable_local, is_local_enabled},
 };
-use intrusive_collections::LinkedList;
+use intrusive_collections::{intrusive_adapter, KeyAdapter, LinkedList, RBTree, RBTreeAtomicLink};
 
 use crate::{prelude::*, sched::nice::Nice};
 
@@ -26,8 +27,9 @@ pub const fn nice_to_weight(nice: Nice) -> isize {
 const WEIGHT_0: isize = nice_to_weight(Nice::new(0));
 
 /// The virtual runtime
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct VRuntime {
+    key: usize,
     vruntime: isize,
     start: u64,
     weight: isize,
@@ -37,8 +39,9 @@ impl VRuntime {
     pub fn new(task: &Task) -> VRuntime {
         let nice = Nice::new(task.priority().as_nice().unwrap() + 20);
         VRuntime {
+            key: task as *const Task as usize,
             vruntime: 0,
-            start: current_tick(),
+            start: raw_ticks(),
             weight: nice_to_weight(nice),
         }
     }
@@ -52,7 +55,7 @@ impl VRuntime {
     }
 
     pub fn update(&mut self) {
-        let cur = current_tick();
+        let cur = raw_ticks();
         self.vruntime = self.get_with_cur(cur);
         self.start = cur;
     }
@@ -69,7 +72,9 @@ impl VRuntime {
 
 impl Ord for VRuntime {
     fn cmp(&self, other: &Self) -> Ordering {
-        (self.get().cmp(&other.get())).then_with(|| self.start.cmp(&other.start))
+        (self.get().cmp(&other.get()))
+            .then_with(|| self.start.cmp(&other.start))
+            .then_with(|| self.key.cmp(&other.key))
     }
 }
 
@@ -83,11 +88,28 @@ impl Eq for VRuntime {}
 
 impl PartialEq for VRuntime {
     fn eq(&self, other: &Self) -> bool {
-        self.get() == other.get()
+        self.get() == other.get() && self.start == other.start && self.key == other.key
     }
 }
 
-const BANDWIDTH: isize = 500;
+intrusive_adapter!(VrAdapter = Arc<Task>: Task { rb_tree_link: RBTreeAtomicLink });
+impl<'a> KeyAdapter<'a> for VrAdapter {
+    type Key = VRuntime;
+
+    fn get_key(&self, value: &'a Task) -> VRuntime {
+        *value.sched_entity.lock().get().unwrap()
+    }
+}
+
+fn vr(task: &Task) -> isize {
+    // SAFETY: task is contained in the RB tree of our current scheduler.
+    unsafe {
+        (*task.sched_entity.as_ptr())
+            .get::<VRuntime>()
+            .unwrap()
+            .get()
+    }
+}
 
 /// The Completely Fair Scheduler(CFS)
 ///
@@ -101,7 +123,7 @@ pub struct CompletelyFairScheduler {
 
     min_vruntime: AtomicIsize,
     /// Tasks with a priority greater than or equal to 100 are regarded as normal tasks.
-    normal_tasks: SpinLock<BTreeMap<VRuntime, Arc<Task>>>,
+    normal_tasks: SpinLock<RBTree<VrAdapter>>,
 }
 
 impl CompletelyFairScheduler {
@@ -110,7 +132,7 @@ impl CompletelyFairScheduler {
             real_time_tasks: SpinLock::new(LinkedList::new(Default::default())),
 
             min_vruntime: AtomicIsize::new(0),
-            normal_tasks: SpinLock::new(BTreeMap::new()),
+            normal_tasks: SpinLock::new(RBTree::new(VrAdapter::new())),
         }
     }
 
@@ -123,18 +145,21 @@ impl CompletelyFairScheduler {
             task.set_need_resched(false);
             let _irq = disable_local();
 
-            let opt = task.sched_entity.lock().remove::<VRuntime>();
-            let vruntime = opt.unwrap_or_else(|| VRuntime::new(&task));
-            // if !force_yield {
-            //     let min_boundary = (self.min_vruntime.load(Relaxed) - BANDWIDTH).max(0);
-            //     let delta = (min_boundary - vruntime.vruntime).max(1);
-            //     vruntime.vruntime += delta.ilog2() as isize
-            // }
+            {
+                let mut se = task.sched_entity.lock();
+                let ent = se.entry();
+                let _vruntime = ent.or_insert_with(|| VRuntime::new(&task));
+                // if !force_yield {
+                //     let min_boundary = (self.min_vruntime.load(Relaxed) - BANDWIDTH).max(0);
+                //     let delta = (min_boundary - vruntime.vruntime).max(1);
+                //     vruntime.vruntime += delta.ilog2() as isize
+                // }
+            }
 
             let mut map = self.normal_tasks.lock();
-            map.insert(vruntime, task);
+            map.insert(task);
             self.min_vruntime
-                .store(map.first_key_value().unwrap().0.get(), Relaxed);
+                .store(vr(map.front().get().unwrap()), Relaxed);
         }
     }
 }
@@ -159,17 +184,14 @@ impl Scheduler for CompletelyFairScheduler {
         }
         drop(real_time_tasks);
 
-        let (vruntime, task) = {
-            let mut set = self.normal_tasks.lock();
-            let ret = set.pop_first()?;
-            let min = match set.first_key_value() {
-                Some((peek, _)) => peek.get(),
-                None => 0,
-            };
-            self.min_vruntime.store(min, Relaxed);
-            ret
+        let mut set = self.normal_tasks.lock();
+        let mut front = set.front_mut();
+        let task = front.remove()?;
+        let min = match front.get() {
+            Some(task) => vr(task),
+            None => 0,
         };
-        task.sched_entity.lock().insert(vruntime);
+        self.min_vruntime.store(min, Relaxed);
         Some(task)
     }
 
@@ -178,57 +200,56 @@ impl Scheduler for CompletelyFairScheduler {
     }
 
     fn should_preempt_cur_task(&self) -> bool {
-        if let Some(cur) = current_task() {
-            if cur.is_real_time() {
-                return true;
-            }
-
+        with_current(|cur| {
             debug_assert!(!is_local_enabled());
             let se = cur.sched_entity.lock();
-            let vr = se.get::<VRuntime>().unwrap();
-            return vr.get() > self.min_vruntime.load(Relaxed);
-        }
-        false
+            match se.get::<VRuntime>() {
+                Some(vr) => vr.get() > self.min_vruntime.load(Relaxed),
+                None => true,
+            }
+        })
+        .unwrap_or(true)
     }
 
     fn tick_cur_task(&self) {
-        if let Some(cur) = current_task() {
-            if cur.is_real_time() {
-                return;
-            }
-
+        with_current(|cur| {
             debug_assert!(!is_local_enabled());
             let mut se = cur.sched_entity.lock();
-            let vruntime = se.get_mut::<VRuntime>().unwrap();
-            vruntime.tick();
+            if let Some(vr) = se.get_mut::<VRuntime>() {
+                vr.tick();
 
-            if vruntime.vruntime > self.min_vruntime.load(Relaxed) {
-                cur.set_need_resched(true);
+                if vr.vruntime > self.min_vruntime.load(Relaxed) {
+                    cur.set_need_resched(true);
+                }
+                // let cur = vr.vruntime;
+                // drop(vruntimes);
+
+                // let cur_tick = raw_ticks();
+                // if cur_tick > PACE.load(Relaxed) + 5000 {
+                //     PACE.store(cur_tick, Relaxed);
+
+                //     println!(
+                //         "cur_tick = {cur_tick}, cur_task = {cur}, min = {}",
+                //         self.min_vruntime.load(Relaxed)
+                //     );
+                //     print!("num_ready = ");
+                //     for r in &*self.normal_tasks.lock() {
+                //         print!("{}, ", r.vruntime);
+                //     }
+                //     print!("\nnum_waiting = ");
+                //     for r in (*self.vruntimes.lock()).values() {
+                //         print!("{}, ", r.vruntime);
+                //     }
+                //     println!();
+                // }
             }
-            // let cur = vruntime.vruntime;
-            // drop(vruntimes);
-
-            // let cur_tick = current_tick();
-            // if cur_tick > PACE.load(Relaxed) + 5000 {
-            //     PACE.store(cur_tick, Relaxed);
-
-            //     println!(
-            //         "cur_tick = {cur_tick}, cur_task = {cur}, min = {}",
-            //         self.min_vruntime.load(Relaxed)
-            //     );
-            //     print!("num_ready = ");
-            //     for r in &*self.normal_tasks.lock() {
-            //         print!("{}, ", r.vruntime);
-            //     }
-            //     print!("\nnum_waiting = ");
-            //     for r in (*self.vruntimes.lock()).values() {
-            //         print!("{}, ", r.vruntime);
-            //     }
-            //     println!();
-            // }
-        }
+        });
 
         // static PACE: AtomicU64 = AtomicU64::new(0);
+    }
+
+    fn prepare_to_yield_cur_task(&self) {
+        self.tick_cur_task()
     }
 
     fn prepare_to_yield_to(&self, task: Arc<Task>) {

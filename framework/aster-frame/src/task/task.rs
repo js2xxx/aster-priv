@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use intrusive_collections::{intrusive_adapter, LinkedListAtomicLink};
+use intrusive_collections::{intrusive_adapter, LinkedListAtomicLink, RBTreeAtomicLink};
 
 use super::{
     add_task, clear_task,
@@ -140,6 +140,7 @@ pub struct Task {
     // TODO:: add multiprocessor support
     cpu_affinity: CpuSet,
     pub sched_entity: SpinLock<SchedEntityMap>,
+    pub rb_tree_link: RBTreeAtomicLink,
 }
 
 impl PartialEq for Task {
@@ -376,6 +377,7 @@ impl TaskOptions {
             priority: self.priority,
             cpu_affinity: self.cpu_affinity,
             sched_entity: SpinLock::new(SchedEntityMap::new()),
+            rb_tree_link: RBTreeAtomicLink::new(),
         };
 
         result.task_inner.lock().ctx.rip = kernel_task_entry as usize;
@@ -407,6 +409,7 @@ impl TaskOptions {
             priority: self.priority,
             cpu_affinity: self.cpu_affinity,
             sched_entity: SpinLock::new(SchedEntityMap::new()),
+            rb_tree_link: RBTreeAtomicLink::new(),
         };
 
         result.task_inner.lock().ctx.rip = kernel_task_entry as usize;
@@ -425,6 +428,6 @@ fn kernel_task_entry() {
     activate_preemption();
     let current_task =
         current_task().expect("no current task, it should have current task in kernel task entry");
-    current_task.func.call(());
+    (current_task.func)();
     current_task.exit();
 }
