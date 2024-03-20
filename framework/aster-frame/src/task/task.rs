@@ -14,11 +14,13 @@ use crate::{
     config::{KERNEL_STACK_SIZE, PAGE_SIZE},
     cpu::CpuSet,
     prelude::*,
-    sync::{Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard, SpinLock},
     timer::current_tick,
     user::UserSpace,
     vm::{page_table::KERNEL_PAGE_TABLE, VmAllocOptions, VmSegment},
 };
+
+type SchedEntityMap = anymap3::hashbrown::Map<dyn Any + Send + Sync>;
 
 core::arch::global_asm!(include_str!("switch.S"));
 
@@ -137,6 +139,7 @@ pub struct Task {
     priority: Priority,
     // TODO:: add multiprocessor support
     cpu_affinity: CpuSet,
+    pub sched_entity: SpinLock<SchedEntityMap>,
 }
 
 impl PartialEq for Task {
@@ -372,6 +375,7 @@ impl TaskOptions {
             link: LinkedListAtomicLink::new(),
             priority: self.priority,
             cpu_affinity: self.cpu_affinity,
+            sched_entity: SpinLock::new(SchedEntityMap::new()),
         };
 
         result.task_inner.lock().ctx.rip = kernel_task_entry as usize;
@@ -402,6 +406,7 @@ impl TaskOptions {
             link: LinkedListAtomicLink::new(),
             priority: self.priority,
             cpu_affinity: self.cpu_affinity,
+            sched_entity: SpinLock::new(SchedEntityMap::new()),
         };
 
         result.task_inner.lock().ctx.rip = kernel_task_entry as usize;

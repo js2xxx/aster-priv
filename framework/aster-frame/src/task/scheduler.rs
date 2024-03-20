@@ -40,7 +40,7 @@ macro_rules! sched_debug {
 /// Operations on the scheduler should be performed with interrupts disabled,
 /// which has been ensured by the callers of the `GLOBAL_SCHEDULER`.
 /// Therefore, implementations of this trait do not need to worry about interrupt safety.
-pub trait Scheduler<T: SchedTaskBase = Task>: Sync + Send {
+pub trait Scheduler<T: ?Sized + SchedTaskBase = Task>: Sync + Send {
     /// Add the task to the scheduler when it enters a runnable state.
     fn enqueue(&self, task: Arc<T>);
 
@@ -75,7 +75,7 @@ pub trait Scheduler<T: SchedTaskBase = Task>: Sync + Send {
     fn prepare_to_yield_cur_task(&self) {
         let cur_task = T::current();
         cur_task.set_need_resched(true);
-        sched_debug!("before yield: {:#X}", Arc::as_ptr(&cur_task) as usize);
+        sched_debug!("before yield: {:p}", Arc::as_ptr(&cur_task));
     }
 
     // FIXME: remove this after merging #632.
@@ -144,21 +144,21 @@ pub(super) fn locked_global_scheduler<'a>() -> SpinLockGuard<'a, GlobalScheduler
 /// The scheduler will pick the most appropriate task eligible to run next if any.
 pub fn pick_next_task() -> Option<Arc<Task>> {
     let task = locked_global_scheduler().pick_next_task();
-    sched_debug!(
-        "fetch next task: {:#X}",
-        task.as_ref().map(|t| Arc::as_ptr(t) as usize).unwrap_or(0)
-    );
+    match &task {
+        Some(task) => sched_debug!("fetch next task: {:p}", Arc::as_ptr(task)),
+        None => sched_debug!("fetch next task: None"),
+    }
     task
 }
 
 /// Enqueue a task into scheduler.
 pub fn add_task(task: Arc<Task>) {
     locked_global_scheduler().enqueue(task.clone());
-    sched_debug!("add task: {:#X}", Arc::as_ptr(&task) as usize);
+    sched_debug!("add task: {:p}", Arc::as_ptr(&task));
 }
 
 /// Remove all the information of the task from the scheduler.
 pub fn clear_task(task: &Arc<Task>) {
     locked_global_scheduler().clear(task);
-    sched_debug!("remove task: {:#X}", Arc::as_ptr(task) as usize);
+    sched_debug!("remove task: {:p}", Arc::as_ptr(task));
 }

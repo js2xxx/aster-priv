@@ -33,6 +33,7 @@ acpi = "4.1.1"
 aml = "0.16.3"
 multiboot2 = "0.16.0"
 rsdp = "2.0.0"
+anymap3 = {version = "1.0.0", default-features = false, features = ["hashbrown"]}
 
 [target.x86_64-unknown-none.dependencies]
 unwinding = { version = "0.2.1", default-features = false, features = ["fde-static", "hide-trace", "panic", "personality", "unwinder"] }
