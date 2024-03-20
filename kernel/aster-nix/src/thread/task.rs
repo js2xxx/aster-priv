@@ -34,7 +34,9 @@ pub fn create_new_user_task(user_space: Arc<UserSpace>, thread_ref: Weak<Thread>
             let user_event = user_mode.execute();
             let context = user_mode.context_mut();
             // handle user event:
-            handle_user_event(user_event, context);
+            if let Some(event) = user_event {
+                handle_user_event(event, context);
+            }
             let current_thread = current_thread!();
             // should be do this comparison before handle signal?
             if current_thread.status().lock().is_exited() {

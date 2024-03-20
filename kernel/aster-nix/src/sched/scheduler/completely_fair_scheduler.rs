@@ -11,14 +11,13 @@ use core::{
 
 use aster_frame::{
     arch::current_tick,
-    sched_debug,
     task::{current_task, NeedResched, ReadPriority, Scheduler, Task, TaskAdapter},
 };
 use intrusive_collections::LinkedList;
 
 use crate::{prelude::*, sched::nice::Nice};
 
-pub fn nice_to_weight(nice: Nice) -> isize {
+pub const fn nice_to_weight(nice: Nice) -> isize {
     const NICE_TO_WEIGHT: [isize; 40] = [
         88761, 71755, 56483, 46273, 36291, 29154, 23254, 18705, 14949, 11916, 9548, 7620, 6100,
         4904, 3906, 3121, 2501, 1991, 1586, 1277, 1024, 820, 655, 526, 423, 335, 272, 215, 172,
@@ -26,6 +25,7 @@ pub fn nice_to_weight(nice: Nice) -> isize {
     ];
     NICE_TO_WEIGHT[(nice.to_raw() + 20) as usize]
 }
+const WEIGHT_0: isize = nice_to_weight(Nice::new(0));
 
 /// The virtual runtime
 #[derive(Clone)]
@@ -40,7 +40,6 @@ pub struct VRuntime {
 impl VRuntime {
     pub fn new(task: Arc<Task>) -> VRuntime {
         let nice = Nice::new(task.priority().as_nice().unwrap() + 20);
-        sched_debug!("prio = {:?}, nice = {nice:?}", task.priority());
         VRuntime {
             vruntime: 0,
             start: current_tick(),
@@ -50,7 +49,7 @@ impl VRuntime {
     }
 
     fn get_with_cur(&self, cur: u64) -> isize {
-        self.vruntime + (((cur - self.start) as isize) * nice_to_weight(Nice::new(0)) / self.weight)
+        self.vruntime + (((cur - self.start) as isize) * WEIGHT_0 / self.weight)
     }
 
     pub fn get(&self) -> isize {
@@ -123,7 +122,7 @@ impl CompletelyFairScheduler {
         }
     }
 
-    fn push(&self, task: Arc<Task>, force_yield: bool) {
+    fn push(&self, task: Arc<Task>, _force_yield: bool) {
         if task.is_real_time() {
             self.real_time_tasks
                 .lock_irq_disabled()
@@ -134,35 +133,22 @@ impl CompletelyFairScheduler {
             // BUG: address is not a strictly unique key
             let key = key_of(&task);
 
-            let mut vruntime = self
+            let vruntime = self
                 .vruntimes
                 .lock_irq_disabled()
                 .remove(&key)
                 .unwrap_or_else(|| VRuntime::new(task));
-            vruntime.vruntime = if force_yield {
-                0
-            } else {
-                let min_boundary = (self.min_vruntime.load(Relaxed) - BANDWIDTH).max(0);
-                let delta = (min_boundary - vruntime.vruntime).max(1);
-                vruntime.vruntime + (delta >> 2) + (delta >> 3)
-            };
-
-            let start = vruntime.start;
-            let v = vruntime.vruntime;
-            let w = vruntime.weight;
+            // vruntime.vruntime = if force_yield {
+            //     0
+            // } else {
+            //     let min_boundary = (self.min_vruntime.load(Relaxed) - BANDWIDTH).max(0);
+            //     let delta = (min_boundary - vruntime.vruntime).max(1);
+            //     vruntime.vruntime + (delta.ilog2() as isize)
+            // };
 
             let mut set = self.normal_tasks.lock_irq_disabled();
             set.insert(vruntime);
             self.min_vruntime.store(set.first().unwrap().get(), Relaxed);
-
-            sched_debug!(
-                "CFS: {} {key:#x}, start = {start}, v = {v}, w = {w}",
-                if force_yield {
-                    "yielding to"
-                } else {
-                    "pushing"
-                }
-            );
         }
     }
 }
@@ -199,12 +185,6 @@ impl Scheduler for CompletelyFairScheduler {
         };
         let task = vruntime.task.clone();
         let key = key_of(&task);
-        sched_debug!(
-            "CFS: picking {key:#x}, start = {}, v = {}, w = {}",
-            vruntime.start,
-            vruntime.vruntime,
-            vruntime.weight,
-        );
         self.vruntimes.lock_irq_disabled().insert(key, vruntime);
         Some(task)
     }
@@ -221,10 +201,7 @@ impl Scheduler for CompletelyFairScheduler {
             let key = key_of(&cur);
 
             let vruntimes = self.vruntimes.lock_irq_disabled();
-            return match vruntimes.get(&key) {
-                Some(vruntime) => vruntime.get() > self.min_vruntime.load(Relaxed),
-                None => true,
-            };
+            return vruntimes[&key].get() > self.min_vruntime.load(Relaxed);
         }
         false
     }
@@ -237,16 +214,36 @@ impl Scheduler for CompletelyFairScheduler {
 
             let key = key_of(&cur);
             let mut vruntimes = self.vruntimes.lock_irq_disabled();
-            if let Some(vruntime) = vruntimes.get_mut(&key) {
-                vruntime.tick();
-                sched_debug!(
-                    "CFS: updating {key:#x}, start = {}, v = {}, w = {}",
-                    vruntime.start,
-                    vruntime.vruntime,
-                    vruntime.weight,
-                );
+            let vruntime = vruntimes.get_mut(&key).unwrap();
+            vruntime.tick();
+
+            if vruntime.vruntime > self.min_vruntime.load(Relaxed) {
+                cur.set_need_resched(true);
             }
+            let cur = vruntime.vruntime;
+            drop(vruntimes);
+
+            // let cur_tick = current_tick();
+            // if cur_tick > PACE.load(Relaxed) + 5000 {
+            //     PACE.store(cur_tick, Relaxed);
+
+            //     println!(
+            //         "cur_tick = {cur_tick}, cur_task = {cur}, min = {}",
+            //         self.min_vruntime.load(Relaxed)
+            //     );
+            //     print!("num_ready = ");
+            //     for r in &*self.normal_tasks.lock() {
+            //         print!("{}, ", r.vruntime);
+            //     }
+            //     print!("\nnum_waiting = ");
+            //     for r in (*self.vruntimes.lock()).values() {
+            //         print!("{}, ", r.vruntime);
+            //     }
+            //     println!();
+            // }
         }
+
+        // static PACE: AtomicU64 = AtomicU64::new(0);
     }
 
     fn prepare_to_yield_to(&self, task: Arc<Task>) {

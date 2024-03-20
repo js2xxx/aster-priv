@@ -71,16 +71,18 @@ pub fn yield_to(task: Arc<Task>) {
 }
 
 /// Switch to the next task selected by the global scheduler if it should.
-pub fn schedule() {
+pub fn schedule() -> bool {
     if !is_preemptible() {
         panic!("schedule() is called under a non-preemptible context.");
     }
     deactivate_preemption();
 
-    if should_preempt_cur_task() {
+    let ret = should_preempt_cur_task();
+    if ret {
         switch_to_next();
     }
     activate_preemption();
+    ret
 }
 
 fn switch_to_next() {

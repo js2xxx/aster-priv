@@ -180,7 +180,7 @@ impl UserContext {
 }
 
 impl UserContextApiInternal for UserContext {
-    fn execute(&mut self) -> crate::user::UserEvent {
+    fn execute(&mut self) -> Option<crate::user::UserEvent> {
         // set interrupt flag so that in user mode it can receive external interrupts
         // set ID flag which means cpu support CPUID instruction
         self.user_context.general.rflags |= (RFlags::INTERRUPT_FLAG | RFlags::ID).bits() as usize;
@@ -212,10 +212,13 @@ impl UserContextApiInternal for UserContext {
                 }
             };
             call_irq_callback_functions(&self.as_trap_frame());
+            if crate::task::schedule() {
+                return None;
+            }
         }
 
         crate::arch::irq::enable_local();
-        if self.user_context.trap_num as u16 != SYSCALL_TRAPNUM {
+        Some(if self.user_context.trap_num as u16 != SYSCALL_TRAPNUM {
             self.cpu_exception_info = CpuExceptionInfo {
                 page_fault_addr: unsafe { x86::controlregs::cr2() },
                 id: self.user_context.trap_num,
@@ -224,7 +227,7 @@ impl UserContextApiInternal for UserContext {
             UserEvent::Exception
         } else {
             UserEvent::Syscall
-        }
+        })
     }
 
     fn as_trap_frame(&self) -> trapframe::TrapFrame {

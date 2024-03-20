@@ -56,7 +56,7 @@ impl UserSpace {
 /// Only visible in aster-frame
 pub(crate) trait UserContextApiInternal {
     /// Starts executing in the user mode.
-    fn execute(&mut self) -> UserEvent;
+    fn execute(&mut self) -> Option<UserEvent>;
 
     /// Use the information inside CpuContext to build a trapframe
     fn as_trap_frame(&self) -> TrapFrame;
@@ -142,7 +142,7 @@ impl<'a> UserMode<'a> {
     ///
     /// After handling the user event and updating the user-mode CPU context,
     /// this method can be invoked again to go back to the user space.
-    pub fn execute(&mut self) -> UserEvent {
+    pub fn execute(&mut self) -> Option<UserEvent> {
         unsafe {
             self.user_space.vm_space().activate();
         }

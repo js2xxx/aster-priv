@@ -29,7 +29,7 @@ impl Nice {
     ///
     /// Values given beyond the permissible range are automatically adjusted
     /// to the nearest boundary value.
-    pub fn new(raw: i8) -> Self {
+    pub const fn new(raw: i8) -> Self {
         if raw > Self::MAX.to_raw() {
             Self::MAX
         } else if raw < Self::MIN.to_raw() {
@@ -40,7 +40,7 @@ impl Nice {
     }
 
     /// Converts to the raw value.
-    pub fn to_raw(self) -> i8 {
+    pub const fn to_raw(self) -> i8 {
         self.value
     }
 }
