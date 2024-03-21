@@ -60,7 +60,7 @@ fn init_tsc_mode() {
         wrmsr(IA32_TSC_DEADLINE, next_tsc_value);
     };
 
-    callback.call(());
+    callback();
     APIC_TIMER_CALLBACK.call_once(|| Arc::new(callback));
 }
 

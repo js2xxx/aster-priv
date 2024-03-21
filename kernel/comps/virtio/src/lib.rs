@@ -4,7 +4,6 @@
 #![no_std]
 #![forbid(unsafe_code)]
 #![allow(dead_code)]
-#![feature(fn_traits)]
 
 extern crate alloc;
 

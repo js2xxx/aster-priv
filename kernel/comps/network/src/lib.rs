@@ -3,7 +3,6 @@
 #![no_std]
 #![forbid(unsafe_code)]
 #![feature(trait_alias)]
-#![feature(fn_traits)]
 
 pub mod buffer;
 pub mod driver;
@@ -78,11 +77,7 @@ pub fn handle_recv_irq(name: &str) {
     let Some((callbacks, _)) = lock.get(name) else {
         return;
     };
-    let callbacks = callbacks.clone();
-    let lock = callbacks.lock();
-    for callback in lock.iter() {
-        callback.call(())
-    }
+    callbacks.lock().iter().for_each(|cb| cb());
 }
 
 pub fn all_devices() -> Vec<(String, NetworkDeviceRef)> {

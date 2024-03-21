@@ -32,9 +32,8 @@ struct TimerInner {
 
 fn timer_callback(callback: &TimerCallback) {
     let data = callback.data();
-    if data.is::<Arc<Timer>>() {
-        let timer = data.downcast_ref::<Arc<Timer>>().unwrap();
-        timer.function.call((timer.clone(),));
+    if let Some(timer) = data.downcast_ref::<Arc<Timer>>() {
+        (timer.function)(timer.clone());
     } else {
         panic!("the timer callback is not Timer structure");
     }

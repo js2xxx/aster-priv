@@ -211,9 +211,7 @@ impl aster_input::InputDevice for InputDevice {
             info!("Input Event:{:?}", event);
 
             let callbacks = self.callbacks.lock();
-            for callback in callbacks.iter() {
-                callback.call((event,));
-            }
+            callbacks.iter().for_each(|callback| callback(event));
         }
     }
 

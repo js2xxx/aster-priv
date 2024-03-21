@@ -11,7 +11,6 @@
 #![feature(const_option)]
 #![feature(exclusive_range_pattern)]
 #![feature(extend_one)]
-#![feature(fn_traits)]
 #![feature(format_args_nl)]
 #![feature(int_roundings)]
 #![feature(let_chains)]

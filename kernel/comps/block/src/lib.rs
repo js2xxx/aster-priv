@@ -28,7 +28,6 @@
 //!
 #![no_std]
 #![forbid(unsafe_code)]
-#![feature(fn_traits)]
 #![feature(step_trait)]
 #![allow(dead_code)]
 

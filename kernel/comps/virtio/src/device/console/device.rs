@@ -66,9 +66,7 @@ impl AnyConsoleDevice for ConsoleDevice {
         let mut recv_buffer = self.buffer.lock();
         let buffer = &recv_buffer.as_ref()[..len as usize];
         let lock = self.callbacks.lock();
-        for callback in lock.iter() {
-            callback.call((buffer,));
-        }
+        lock.iter().for_each(|callback| callback(buffer));
         receive_queue.add_buf(&[], &[recv_buffer.as_mut()]).unwrap();
         if receive_queue.should_notify() {
             receive_queue.notify();

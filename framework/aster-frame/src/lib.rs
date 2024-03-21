@@ -6,7 +6,6 @@
 #![feature(const_ptr_sub_ptr)]
 #![feature(const_trait_impl)]
 #![feature(coroutines)]
-#![feature(fn_traits)]
 #![feature(iter_from_coroutine)]
 #![feature(let_chains)]
 #![feature(negative_impls)]

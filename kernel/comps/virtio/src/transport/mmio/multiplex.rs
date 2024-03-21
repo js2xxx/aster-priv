@@ -52,9 +52,7 @@ impl MultiplexIrq {
                 // Configuration Change Notification
                 &irq.cfg_callbacks
             };
-            for callback in callbacks.iter() {
-                callback.call((trap_frame,));
-            }
+            callbacks.iter().for_each(|callback| callback(trap_frame));
             irq.interrupt_ack.write(&interrupt_status).unwrap();
         };
         lock.irq.on_active(callback);

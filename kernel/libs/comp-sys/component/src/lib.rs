@@ -5,7 +5,6 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
-#![feature(fn_traits)]
 
 extern crate alloc;
 
@@ -173,7 +172,7 @@ fn match_and_call(
 
     for i in infos {
         info!("Component initializing:{:?}", i);
-        if let Err(res) = i.function.unwrap().call(()) {
+        if let Err(res) = (i.function.unwrap())() {
             error!("Component initalize error:{:?}", res);
         } else {
             info!("Component initalize complete");

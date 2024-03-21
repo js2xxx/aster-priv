@@ -85,8 +85,8 @@ fn timer_callback(trap_frame: &TrapFrame) {
         (callback.callback)(&callback);
     }
 
-    if APIC_TIMER_CALLBACK.is_completed() {
-        APIC_TIMER_CALLBACK.get().unwrap().call(());
+    if let Some(callback) = APIC_TIMER_CALLBACK.get() {
+        callback();
     }
 
     if let Some(callback) = SCHEDULER_TICK_CALLBACK.get() {
