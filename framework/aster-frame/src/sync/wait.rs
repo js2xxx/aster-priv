@@ -75,12 +75,12 @@ impl WaitQueue {
                 // FIXME: We currently require 1000 to be a multiple of TIMER_FREQ, but
                 // this may not hold true in the future, because TIMER_FREQ can be greater
                 // than 1000. Then, the code need to be refactored.
-                const_assert!(1000 % TIMER_FREQ == 0);
+                const_assert!(1000000 % TIMER_FREQ == 0);
 
-                let ms_per_tick = 1000 / TIMER_FREQ;
+                let us_per_tick = 1000000 / TIMER_FREQ;
 
                 // The ticks should be equal to or greater than timeout
-                (timeout.as_millis() as u64 + ms_per_tick - 1) / ms_per_tick
+                (timeout.as_micros() as u64 + us_per_tick - 1) / us_per_tick
             };
 
             add_timeout_list(remaining_ticks, waiter.clone(), |timer_call_back| {

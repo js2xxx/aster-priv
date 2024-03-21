@@ -63,12 +63,19 @@ impl KCmdlineArg {
 fn split_arg(input: &str) -> impl Iterator<Item = &str> {
     let mut inside_quotes = false;
 
-    input.split(move |c: char| {
+    let split = input.split(move |c: char| {
         if c == '"' {
             inside_quotes = !inside_quotes;
         }
 
         !inside_quotes && c.is_whitespace()
+    });
+    split.map(|arg| {
+        if arg.starts_with('"') && arg.ends_with('"') {
+            &arg[1..arg.len() - 1]
+        } else {
+            arg
+        }
     })
 }
 

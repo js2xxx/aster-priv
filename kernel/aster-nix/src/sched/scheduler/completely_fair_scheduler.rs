@@ -51,7 +51,7 @@ impl VRuntime {
     }
 
     pub fn get(&self) -> isize {
-        self.get_with_cur(self.start)
+        self.vruntime
     }
 
     pub fn update(&mut self) {
@@ -158,8 +158,8 @@ impl CompletelyFairScheduler {
 
             let mut map = self.normal_tasks.lock();
             map.insert(task);
-            self.min_vruntime
-                .store(vr(map.front().get().unwrap()), Relaxed);
+            let min_vruntime = vr(map.front().get().unwrap());
+            self.min_vruntime.store(min_vruntime, Relaxed);
         }
     }
 }
@@ -186,10 +186,15 @@ impl Scheduler for CompletelyFairScheduler {
 
         let mut set = self.normal_tasks.lock();
         let mut front = set.front_mut();
-        let task = front.remove()?;
-        let min = match front.get() {
-            Some(task) => vr(task),
-            None => 0,
+        let (task, min) = loop {
+            let task = front.remove()?;
+            if task.status().is_runnable() {
+                let min = match front.get() {
+                    Some(task) => vr(task),
+                    None => 0,
+                };
+                break (task, min);
+            }
         };
         self.min_vruntime.store(min, Relaxed);
         Some(task)
@@ -215,17 +220,17 @@ impl Scheduler for CompletelyFairScheduler {
         with_current(|cur| {
             debug_assert!(!is_local_enabled());
             let mut se = cur.sched_entity.lock();
-            if let Some(vr) = se.get_mut::<VRuntime>() {
-                vr.tick();
+            if let Some(v) = se.get_mut::<VRuntime>() {
+                v.tick();
 
-                if vr.vruntime > self.min_vruntime.load(Relaxed) {
+                if v.vruntime > self.min_vruntime.load(Relaxed) {
                     cur.set_need_resched(true);
                 }
-                // let cur = vr.vruntime;
-                // drop(vruntimes);
+                // let cur = v.vruntime;
+                // drop(se);
 
-                // let cur_tick = raw_ticks();
-                // if cur_tick > PACE.load(Relaxed) + 5000 {
+                // let cur_tick = aster_frame::arch::current_tick();
+                // if cur_tick > PACE.load(Relaxed) + 10000 {
                 //     PACE.store(cur_tick, Relaxed);
 
                 //     println!(
@@ -234,18 +239,14 @@ impl Scheduler for CompletelyFairScheduler {
                 //     );
                 //     print!("num_ready = ");
                 //     for r in &*self.normal_tasks.lock() {
-                //         print!("{}, ", r.vruntime);
-                //     }
-                //     print!("\nnum_waiting = ");
-                //     for r in (*self.vruntimes.lock()).values() {
-                //         print!("{}, ", r.vruntime);
+                //         print!("{}, ", vr(r));
                 //     }
                 //     println!();
                 // }
             }
         });
 
-        // static PACE: AtomicU64 = AtomicU64::new(0);
+        static PACE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     }
 
     fn prepare_to_yield_cur_task(&self) {
