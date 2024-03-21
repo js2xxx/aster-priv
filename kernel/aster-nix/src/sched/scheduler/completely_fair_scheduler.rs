@@ -196,6 +196,10 @@ impl Scheduler for CompletelyFairScheduler {
                 break (task, min);
             }
         };
+        // SAFETY: task is contained in the RB tree of our current scheduler.
+        if let Some(vr) = unsafe { (*task.sched_entity.as_ptr()).get_mut::<VRuntime>() } {
+            vr.start = raw_ticks();
+        }
         self.min_vruntime.store(min, Relaxed);
         Some(task)
     }
