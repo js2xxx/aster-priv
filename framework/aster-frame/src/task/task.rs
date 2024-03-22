@@ -138,7 +138,7 @@ pub struct Task {
     link: LinkedListAtomicLink,
     priority: Priority,
     // TODO:: add multiprocessor support
-    cpu_affinity: CpuSet,
+    pub cpu_affinity: CpuSet,
     pub sched_entity: SpinLock<SchedEntityMap>,
     pub rb_tree_link: RBTreeAtomicLink,
 }
@@ -205,7 +205,10 @@ impl Task {
         clear_task(self);
         schedule();
         panic_if_in_atomic();
-        unreachable!()
+        loop {
+            super::yield_now();
+            core::hint::spin_loop();
+        }
     }
 }
 

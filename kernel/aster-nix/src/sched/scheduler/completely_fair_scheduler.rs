@@ -9,6 +9,7 @@ use core::{
 
 use aster_frame::{
     arch::read_tsc,
+    cpu::this_cpu,
     task::{with_current, NeedResched, ReadPriority, Scheduler, Task, TaskAdapter},
     trap::{disable_local, is_local_enabled},
 };
@@ -189,11 +190,15 @@ impl Scheduler for CompletelyFairScheduler {
         let (task, min) = loop {
             let task = front.remove()?;
             if task.status().is_runnable() {
-                let min = match front.get() {
-                    Some(task) => vr(task),
-                    None => 0,
-                };
-                break (task, min);
+                if task.cpu_affinity.contains(this_cpu()) {
+                    let min = match front.get() {
+                        Some(task) => vr(task),
+                        None => 0,
+                    };
+                    break (task, min);
+                } else {
+                    front.insert(task);
+                }
             }
         };
         // SAFETY: task is contained in the RB tree of our current scheduler.

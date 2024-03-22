@@ -11,7 +11,7 @@ use core::{
 use bitvec::{order::Lsb0, slice::IterOnes, vec::BitVec};
 use x86::msr::{wrmsr, IA32_TSC_AUX};
 
-use crate::{arch::irq, config::PAGE_SIZE, vm::VmAllocOptions};
+use crate::{config::PAGE_SIZE, trap::disable_local, vm::VmAllocOptions};
 
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
@@ -48,6 +48,12 @@ impl CpuSet {
         let mut bitset = BitVec::with_capacity(num_cpus as usize);
         bitset.resize(num_cpus as usize, false);
         Self { bitset }
+    }
+
+    pub fn single(cpu_id: u32) -> Self {
+        let mut set = Self::new_empty();
+        set.add(cpu_id);
+        set
     }
 
     pub fn add(&mut self, cpu_id: u32) {
@@ -155,19 +161,12 @@ impl<T> CpuLocal<T> {
     pub fn with<U, F: FnOnce(&T) -> U>(&self, f: F) -> U {
         // Disable interrupts when accessing cpu-local variable
         // Preemption is also disabled in `disable_local()`.
-        let enabled = irq::is_local_enabled();
-        if enabled {
-            irq::disable_local();
-        }
+        let _guard = disable_local();
         // Safety. Now that the local IRQs are disabled, this CPU-local object can only be
         // accessed by the current task/thread. So it is safe to get its immutable reference
         // regardless of whether `T` implements `Sync` or not.
         let val_ref = unsafe { self.do_borrow() };
-        let ret = f(val_ref);
-        if enabled {
-            irq::enable_local();
-        }
-        ret
+        f(val_ref)
     }
 
     unsafe fn do_borrow(&self) -> &T {

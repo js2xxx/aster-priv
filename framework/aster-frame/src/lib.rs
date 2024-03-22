@@ -15,6 +15,7 @@
 #![feature(panic_info_message)]
 #![feature(ptr_sub_ptr)]
 #![feature(strict_provenance)]
+#![feature(thread_local)]
 #![allow(dead_code)]
 #![allow(unused_variables)]
 #![no_std]

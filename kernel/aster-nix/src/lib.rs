@@ -27,6 +27,7 @@
 use aster_frame::{
     arch::qemu::{exit_qemu, QemuExitCode},
     boot,
+    cpu::{this_cpu, CpuSet},
 };
 use process::Process;
 
@@ -125,7 +126,9 @@ fn init_thread() {
 /// first process never return
 #[controlled]
 pub fn run_first_process() -> ! {
-    Thread::spawn_kernel_thread(ThreadOptions::new(init_thread));
+    Thread::spawn_kernel_thread(
+        ThreadOptions::new(init_thread).cpu_affinity(CpuSet::single(this_cpu())),
+    );
     loop {
         Thread::yield_now();
         core::hint::spin_loop();
