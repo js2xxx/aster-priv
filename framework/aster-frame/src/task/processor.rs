@@ -123,23 +123,20 @@ fn switch_to(next_task: Arc<Task>) {
     panic_if_in_atomic();
     let next_task_ctx = &next_task.context() as *const TaskContext;
 
-    let current_task_ctx = PROCESSOR.with_borrow_mut(|processor| {
+    let (current_task_ctx, cur_task) = PROCESSOR.with_borrow_mut(|processor| {
         let cur_task = processor.current.replace(next_task);
 
-        match cur_task {
+        let ctx = match &cur_task {
             None => processor.idle_task_ctx_ptr(),
-            Some(cur_task) => {
-                let mut inner_exclusive_access = cur_task.inner_exclusive_access();
-                let task_context = &mut inner_exclusive_access.ctx as *mut TaskContext;
-                drop(inner_exclusive_access);
-
-                if cur_task.status().is_runnable() {
-                    add_task(cur_task);
-                }
-                task_context
-            }
-        }
+            Some(cur_task) => &mut cur_task.inner_exclusive_access().ctx as _,
+        };
+        (ctx, cur_task)
     });
+    if let Some(cur_task) = cur_task {
+        if cur_task.status().is_runnable() {
+            add_task(cur_task);
+        }
+    }
     unsafe {
         context_switch(current_task_ctx, next_task_ctx);
     }
