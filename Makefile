@@ -14,6 +14,7 @@ INTEL_TDX ?= 0
 SKIP_GRUB_MENU ?= 1
 SYSCALL_TEST_DIR ?= /tmp
 RELEASE_MODE ?= 0
+SMP ?= 1
 # End of auto test features.
 
 CARGO_OSDK_ARGS :=
@@ -44,6 +45,7 @@ endif
 CARGO_OSDK_ARGS += --boot.loader="$(BOOT_LOADER)"
 CARGO_OSDK_ARGS += --boot.protocol="$(BOOT_PROTOCOL)"
 CARGO_OSDK_ARGS += --qemu.machine="$(QEMU_MACHINE)"
+CARGO_OSDK_ARGS += --qemu.args="-smp $(SMP)"
 
 ifeq ($(QEMU_MACHINE), microvm)
 CARGO_OSDK_ARGS += --select microvm

@@ -32,7 +32,7 @@ pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
         line: info.location().unwrap().line() as usize,
         col: info.location().unwrap().column() as usize,
     };
-    early_println!("{}", info);
+    early_println!("CPU#{} {}", crate::cpu::this_cpu(), info);
     early_println!("printing stack trace:");
     print_stack_trace();
     // Throw an exception and expecting it to be caught.

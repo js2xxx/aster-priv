@@ -37,7 +37,7 @@ type SchedulerTickHook = dyn Fn() + Send + Sync + 'static;
 static SCHEDULER_TICK_CALLBACK: Once<Arc<SchedulerTickHook>> = Once::new();
 
 pub fn init() {
-    if kernel::apic::APIC_INSTANCE.is_completed() {
+    if kernel::apic::is_init() {
         // Get the free irq number first. Use `allocate_target_irq` to get the Irq handle after dropping it.
         // Because the function inside `apic::init` will allocate this irq.
         let irq = IrqLine::alloc().unwrap();
@@ -55,10 +55,6 @@ pub fn init() {
 
 pub fn current_tick() -> TickCount {
     TICK.load(Ordering::Acquire)
-}
-
-pub fn raw_ticks() -> u64 {
-    unsafe { core::arch::x86_64::_rdtsc() }
 }
 
 fn timer_callback(trap_frame: &TrapFrame) {

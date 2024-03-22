@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
+use core::{
+    cell::Cell,
+    sync::atomic::{AtomicBool, Ordering::Relaxed},
+};
 
 use crate::{
     arch::irq::{
@@ -18,28 +21,32 @@ cpu_local! {
 #[derive(Debug)]
 struct PreemptInfo {
     /// The number of locks and irq-disabled contexts held by the current CPU.
-    num: AtomicUsize,
+    num: Cell<usize>,
     in_preemption: AtomicBool,
 }
 
 impl PreemptInfo {
     const fn new() -> Self {
         Self {
-            num: AtomicUsize::new(0),
+            num: Cell::new(0),
             in_preemption: AtomicBool::new(false),
         }
     }
 
     fn num(&self) -> usize {
-        self.num.load(Relaxed)
+        self.num.get()
     }
 
     fn inc_num(&self) -> usize {
-        self.num.fetch_add(1, Relaxed)
+        let get = self.num.get();
+        self.num.set(get + 1);
+        get
     }
 
     fn dec_num(&self) -> usize {
-        self.num.fetch_sub(1, Relaxed)
+        let get = self.num.get();
+        self.num.set(get - 1);
+        get
     }
 
     fn in_preemption(&self) -> bool {
@@ -94,12 +101,12 @@ impl !Send for DisablePreemptGuard {}
 
 impl DisablePreemptGuard {
     pub fn for_irq() -> Self {
-        PREEMPT_INFO.inc_num();
+        PREEMPT_INFO.with(|p| p.inc_num());
         Self::Irq(_Guard { _private: () })
     }
 
     pub fn for_lock() -> Self {
-        PREEMPT_INFO.inc_num();
+        PREEMPT_INFO.with(|p| p.inc_num());
         Self::Lock(_Guard { _private: () })
     }
 
@@ -114,8 +121,8 @@ impl DisablePreemptGuard {
 impl Drop for DisablePreemptGuard {
     fn drop(&mut self) {
         match self {
-            Self::Irq(_) | Self::Lock(_) => _ = PREEMPT_INFO.dec_num(),
-            Self::Sched(_) => PREEMPT_INFO.activate(),
+            Self::Irq(_) | Self::Lock(_) => _ = PREEMPT_INFO.with(|p| p.dec_num()),
+            Self::Sched(_) => PREEMPT_INFO.with(|p| p.activate()),
         }
     }
 }
@@ -123,29 +130,29 @@ impl Drop for DisablePreemptGuard {
 /// Whether the current CPU is in atomic context,
 /// which means it holds some locks with irq disabled or is in irq context.
 pub fn in_atomic() -> bool {
-    PREEMPT_INFO.in_atomic()
+    PREEMPT_INFO.with(|p| p.in_atomic())
 }
 
 /// Whether the current CPU is preemptible, which means it is neither in atomic context,
 /// nor in IRQ context and the preemption is enabled.
 /// If it is not preemptible, the CPU cannot call `schedule()`.
 pub fn is_preemptible() -> bool {
-    PREEMPT_INFO.is_preemptible()
+    PREEMPT_INFO.with(|p| p.is_preemptible())
 }
 
 pub fn is_in_preemption() -> bool {
-    PREEMPT_INFO.in_preemption()
+    PREEMPT_INFO.with(|p| p.in_preemption())
 }
 
 /// Allow preemption on the current CPU.
 /// However, preemptible or not actually depends on the counter in `PREEMPT_INFO`.
 pub fn activate_preemption() {
-    PREEMPT_INFO.activate();
+    PREEMPT_INFO.with(|p| p.activate());
 }
 
 /// Disalbe all preemption on the current CPU.
 pub fn deactivate_preemption() {
-    PREEMPT_INFO.deactivate();
+    PREEMPT_INFO.with(|p| p.deactivate());
 }
 
 // TODO: impl might_sleep
@@ -155,7 +162,7 @@ pub fn panic_if_in_atomic() {
     }
     panic!(
         "The CPU is not atomic: PREEMPT_INFO was {} with the in_preemption flag as {}.",
-        PREEMPT_INFO.num(),
-        PREEMPT_INFO.in_preemption()
+        PREEMPT_INFO.with(|p| p.num()),
+        PREEMPT_INFO.with(|p| p.in_preemption())
     );
 }

@@ -14,8 +14,9 @@ macro_rules! early_print {
 }
 
 #[macro_export]
+#[allow_internal_unstable(format_args_nl)]
 macro_rules! early_println {
   ($fmt: literal $(, $($arg: tt)+)?) => {
-    $crate::console::print(format_args!(concat!($fmt, "\n") $(, $($arg)+)?))
+    $crate::console::print(format_args_nl!($fmt $(, $($arg)+)?))
   }
 }

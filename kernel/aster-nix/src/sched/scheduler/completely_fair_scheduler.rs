@@ -8,7 +8,7 @@ use core::{
 };
 
 use aster_frame::{
-    arch::raw_ticks,
+    arch::read_tsc,
     task::{with_current, NeedResched, ReadPriority, Scheduler, Task, TaskAdapter},
     trap::{disable_local, is_local_enabled},
 };
@@ -41,7 +41,7 @@ impl VRuntime {
         VRuntime {
             key: task as *const Task as usize,
             vruntime: 0,
-            start: raw_ticks(),
+            start: read_tsc(),
             weight: nice_to_weight(nice),
         }
     }
@@ -55,7 +55,7 @@ impl VRuntime {
     }
 
     pub fn update(&mut self) {
-        let cur = raw_ticks();
+        let cur = read_tsc();
         self.vruntime = self.get_with_cur(cur);
         self.start = cur;
     }
@@ -198,7 +198,7 @@ impl Scheduler for CompletelyFairScheduler {
         };
         // SAFETY: task is contained in the RB tree of our current scheduler.
         if let Some(vr) = unsafe { (*task.sched_entity.as_ptr()).get_mut::<VRuntime>() } {
-            vr.start = raw_ticks();
+            vr.start = read_tsc();
         }
         self.min_vruntime.store(min, Relaxed);
         Some(task)

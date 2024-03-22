@@ -10,9 +10,11 @@ use trapframe::TrapFrame;
 use super::{device::serial::SerialPort, kernel::IO_APIC};
 use crate::{sync::SpinLock, trap::IrqLine};
 
+static STDOUT: SpinLock<Stdout> = SpinLock::new(Stdout);
+
 #[inline]
 pub fn print(args: fmt::Arguments) {
-    Stdout.write_fmt(args).unwrap();
+    STDOUT.lock_irq_disabled().write_fmt(args).unwrap();
 }
 
 pub type InputCallback = dyn Fn(u8) + Send + Sync + 'static;

@@ -126,7 +126,10 @@ fn init_thread() {
 #[controlled]
 pub fn run_first_process() -> ! {
     Thread::spawn_kernel_thread(ThreadOptions::new(init_thread));
-    unreachable!()
+    loop {
+        Thread::yield_now();
+        core::hint::spin_loop();
+    }
 }
 
 fn print_banner() {

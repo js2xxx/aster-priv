@@ -43,6 +43,7 @@ impl KernelThreadExt for Thread {
         let thread = Arc::new_cyclic(|thread_ref| {
             let task = TaskOptions::new(thread_fn)
                 .data(thread_ref.clone())
+                .cpu_affinity(thread_options.cpu_affinity)
                 .build()
                 .unwrap();
             let status = ThreadStatus::Init;

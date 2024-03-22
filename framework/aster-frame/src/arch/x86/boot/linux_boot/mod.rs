@@ -138,6 +138,17 @@ fn init_memory_regions(memory_regions: &'static Once<Vec<MemoryRegion>>) {
         MemoryRegionType::Module,
     ));
 
+    // Add the ap boot region.
+    extern "C" {
+        fn __ap_boot_start();
+        fn __ap_boot_end();
+    }
+    regions.push(MemoryRegion::new(
+        __ap_boot_start as usize,
+        __ap_boot_end as usize - __ap_boot_start as usize,
+        MemoryRegionType::Reserved,
+    ));
+
     memory_regions.call_once(|| non_overlapping_regions_from(regions.as_ref()));
 }
 

@@ -15,7 +15,13 @@ impl log::Log for Logger {
 
     fn log(&self, record: &Record) {
         if self.enabled(record.metadata()) {
-            early_println!("[{}]: {}", record.level(), record.args());
+            // early_println!("[{}]: {}", record.level(), record.args());
+            early_println!(
+                "[{}]: CPU#{}: {}",
+                record.level(),
+                crate::cpu::this_cpu(),
+                record.args()
+            );
         }
     }
 

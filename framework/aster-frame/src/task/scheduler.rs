@@ -2,15 +2,10 @@
 
 use crate::{
     prelude::*,
-    sync::{SpinLock, SpinLockGuard},
     task::{SchedTaskBase, Task},
 };
 
-pub(crate) static GLOBAL_SCHEDULER: spin::Once<SpinLock<GlobalScheduler>> = spin::Once::new();
-
-pub fn init() {
-    GLOBAL_SCHEDULER.call_once(|| SpinLock::new(GlobalScheduler { scheduler: None }));
-}
+pub(crate) static GLOBAL_SCHEDULER: GlobalScheduler = GlobalScheduler::new();
 
 /// Logs the scheduler debug information.
 ///
@@ -84,47 +79,52 @@ pub trait Scheduler<T: ?Sized + SchedTaskBase = Task>: Sync + Send {
 }
 
 pub struct GlobalScheduler {
-    scheduler: Option<&'static dyn Scheduler>,
+    scheduler: spin::Once<&'static dyn Scheduler>,
     // TODO: add multiple scheduler management
 }
 
 impl GlobalScheduler {
-    pub fn new() -> Self {
-        Self { scheduler: None }
+    pub const fn new() -> Self {
+        Self {
+            scheduler: spin::Once::new(),
+        }
     }
 
     /// Pick the next task to run from scheduler.
     /// Require the scheduler is not none.
     pub fn pick_next_task(&self) -> Option<Arc<Task>> {
-        self.scheduler.unwrap().pick_next_task()
+        self.scheduler.get().and_then(|s| s.pick_next_task())
     }
 
     /// Enqueue a task into scheduler.
     /// Require the scheduler is not none.
     pub fn enqueue(&self, task: Arc<Task>) {
-        self.scheduler.unwrap().enqueue(task)
+        self.scheduler.get().unwrap().enqueue(task)
     }
 
     /// Remove the task and its related information from the scheduler.
     pub fn clear(&self, task: &Arc<Task>) {
-        self.scheduler.unwrap().clear(task);
+        self.scheduler.get().unwrap().clear(task);
     }
 
     pub fn should_preempt_cur_task(&self) -> bool {
-        self.scheduler.unwrap().should_preempt_cur_task()
+        self.scheduler.get().unwrap().should_preempt_cur_task()
     }
 
     pub fn tick_cur_task(&self) {
-        self.scheduler.unwrap().tick_cur_task();
+        self.scheduler.get().unwrap().tick_cur_task();
     }
 
     pub fn prepare_to_yield_cur_task(&self) {
-        self.scheduler.unwrap().prepare_to_yield_cur_task()
+        self.scheduler.get().unwrap().prepare_to_yield_cur_task()
     }
 
     // FIXME: remove this after merging #632.
     pub fn prepare_to_yield_to(&self, target_task: Arc<Task>) {
-        self.scheduler.unwrap().prepare_to_yield_to(target_task)
+        self.scheduler
+            .get()
+            .unwrap()
+            .prepare_to_yield_to(target_task)
     }
 }
 
@@ -132,18 +132,13 @@ impl GlobalScheduler {
 ///
 /// This must be called before invoking `Task::spawn`.
 pub fn set_scheduler(scheduler: &'static dyn Scheduler) {
-    locked_global_scheduler().scheduler = Some(scheduler);
-}
-
-/// Get the locked global task scheduler.
-pub(super) fn locked_global_scheduler<'a>() -> SpinLockGuard<'a, GlobalScheduler> {
-    GLOBAL_SCHEDULER.get().unwrap().lock_irq_disabled()
+    GLOBAL_SCHEDULER.scheduler.call_once(|| scheduler);
 }
 
 /// Pick the next task to run from scheduler.
 /// The scheduler will pick the most appropriate task eligible to run next if any.
 pub fn pick_next_task() -> Option<Arc<Task>> {
-    let task = locked_global_scheduler().pick_next_task();
+    let task = GLOBAL_SCHEDULER.pick_next_task();
     match &task {
         Some(task) => sched_debug!("fetch next task: {:p}", Arc::as_ptr(task)),
         None => sched_debug!("fetch next task: None"),
@@ -153,12 +148,12 @@ pub fn pick_next_task() -> Option<Arc<Task>> {
 
 /// Enqueue a task into scheduler.
 pub fn add_task(task: Arc<Task>) {
-    locked_global_scheduler().enqueue(task.clone());
+    GLOBAL_SCHEDULER.enqueue(task.clone());
     sched_debug!("add task: {:p}", Arc::as_ptr(&task));
 }
 
 /// Remove all the information of the task from the scheduler.
 pub fn clear_task(task: &Arc<Task>) {
-    locked_global_scheduler().clear(task);
+    GLOBAL_SCHEDULER.clear(task);
     sched_debug!("remove task: {:p}", Arc::as_ptr(task));
 }

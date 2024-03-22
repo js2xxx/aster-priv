@@ -19,7 +19,7 @@ mod options;
 pub(crate) mod page_table;
 mod space;
 
-use alloc::{borrow::ToOwned, vec::Vec};
+use alloc::vec::Vec;
 
 use spin::Once;
 
@@ -60,24 +60,19 @@ pub(crate) fn paddr_to_vaddr(pa: usize) -> usize {
     pa + PHYS_OFFSET
 }
 
-/// Only available inside aster-frame
-pub(crate) static MEMORY_REGIONS: Once<Vec<MemoryRegion>> = Once::new();
-
 pub static FRAMEBUFFER_REGIONS: Once<Vec<MemoryRegion>> = Once::new();
 
 pub(crate) fn init() {
-    let memory_regions = crate::boot::memory_regions().to_owned();
-    frame_allocator::init(&memory_regions);
+    let memory_regions = crate::boot::memory_regions();
+    frame_allocator::init(memory_regions);
     page_table::init();
     dma::init();
 
     let mut framebuffer_regions = Vec::new();
-    for i in memory_regions.iter() {
+    for i in memory_regions {
         if i.typ() == MemoryRegionType::Framebuffer {
             framebuffer_regions.push(*i);
         }
     }
     FRAMEBUFFER_REGIONS.call_once(|| framebuffer_regions);
-
-    MEMORY_REGIONS.call_once(|| memory_regions);
 }

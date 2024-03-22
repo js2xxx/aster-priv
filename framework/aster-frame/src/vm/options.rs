@@ -14,6 +14,7 @@ pub struct VmAllocOptions {
     nframes: usize,
     is_contiguous: bool,
     uninit: bool,
+    need_dealloc: bool,
 }
 
 impl VmAllocOptions {
@@ -23,6 +24,7 @@ impl VmAllocOptions {
             nframes,
             is_contiguous: false,
             uninit: false,
+            need_dealloc: true,
         }
     }
 
@@ -31,6 +33,11 @@ impl VmAllocOptions {
     /// The default value is `false`.
     pub fn is_contiguous(&mut self, is_contiguous: bool) -> &mut Self {
         self.is_contiguous = is_contiguous;
+        self
+    }
+
+    pub fn need_dealloc(&mut self, need_dealloc: bool) -> &mut Self {
+        self.need_dealloc = need_dealloc;
         self
     }
 
@@ -98,6 +105,10 @@ impl VmAllocOptions {
     }
 
     fn flags(&self) -> VmFrameFlags {
-        VmFrameFlags::empty()
+        if self.need_dealloc {
+            VmFrameFlags::NEED_DEALLOC
+        } else {
+            VmFrameFlags::empty()
+        }
     }
 }

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 //! The framework part of Asterinas.
+#![allow(internal_features)]
 #![feature(alloc_error_handler)]
+#![feature(allow_internal_unstable)]
 #![feature(const_mut_refs)]
 #![feature(const_ptr_sub_ptr)]
 #![feature(const_trait_impl)]
@@ -36,6 +38,7 @@ pub mod logger;
 #[cfg(target_os = "none")]
 pub mod panicking;
 pub mod prelude;
+pub mod smp;
 pub mod sync;
 pub mod task;
 pub mod timer;
@@ -51,6 +54,8 @@ pub use self::{cpu::CpuLocal, error::Error, prelude::Result};
 
 pub fn init() {
     arch::before_all_init();
+    // Safety: Cpu local data has not been accessed before
+    unsafe { cpu::bsp_init() };
     logger::init();
     #[cfg(feature = "intel_tdx")]
     let td_info = init_tdx().unwrap();
@@ -65,6 +70,8 @@ pub fn init() {
     vm::init();
     trap::init();
     task::init();
+    arch::mid_init();
+    smp::init();
     arch::after_all_init();
     bus::init();
     invoke_ffi_init_funcs();

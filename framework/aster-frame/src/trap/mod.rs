@@ -12,7 +12,5 @@ pub use self::irq::{
 };
 
 pub(crate) fn init() {
-    unsafe {
-        trapframe::init();
-    }
+    unsafe { trapframe::init() }
 }

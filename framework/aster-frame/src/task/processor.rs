@@ -7,10 +7,10 @@ use super::{
     preempt::{
         activate_preemption, deactivate_preemption, in_atomic, is_preemptible, panic_if_in_atomic,
     },
-    scheduler::{add_task, locked_global_scheduler, pick_next_task},
+    scheduler::{add_task, pick_next_task, GLOBAL_SCHEDULER},
     task::{context_switch, NeedResched, Task, TaskContext},
 };
-use crate::{arch::timer::register_scheduler_tick, cpu_local, trap::disable_local, CpuLocal};
+use crate::{arch::timer::register_scheduler_tick, cpu_local, trap::disable_local};
 
 #[derive(Default)]
 pub struct Processor {
@@ -45,13 +45,11 @@ pub fn init() {
 }
 
 pub fn current_task() -> Option<Arc<Task>> {
-    CpuLocal::borrow_with(&PROCESSOR, |processor| {
-        processor.borrow().current().cloned()
-    })
+    PROCESSOR.with_borrow(|processor| processor.current().cloned())
 }
 
 pub fn with_current<T>(f: impl FnOnce(&Arc<Task>) -> T) -> Option<T> {
-    CpuLocal::borrow_with(&PROCESSOR, |processor| processor.borrow().current().map(f))
+    PROCESSOR.with_borrow(|processor| processor.current().map(f))
 }
 
 /// Yields execution so that another task may be scheduled.
@@ -61,7 +59,7 @@ pub fn with_current<T>(f: impl FnOnce(&Arc<Task>) -> T) -> Option<T> {
 /// a Rust keyword.
 pub fn yield_now() {
     if with_current(|_| {}).is_some() {
-        locked_global_scheduler().prepare_to_yield_cur_task();
+        GLOBAL_SCHEDULER.prepare_to_yield_cur_task();
     }
     schedule();
 }
@@ -69,7 +67,7 @@ pub fn yield_now() {
 // FIXME: remove this func after merging #632.
 pub fn yield_to(task: Arc<Task>) {
     if with_current(|_| {}).is_some() {
-        locked_global_scheduler().prepare_to_yield_to(task);
+        GLOBAL_SCHEDULER.prepare_to_yield_to(task);
     } else {
         add_task(task);
     }
@@ -109,7 +107,7 @@ fn should_preempt_cur_task() -> bool {
 
     with_current(|cur_task| !cur_task.status().is_runnable() || cur_task.need_resched())
         .unwrap_or(true)
-        || locked_global_scheduler().should_preempt_cur_task()
+        || GLOBAL_SCHEDULER.should_preempt_cur_task()
 }
 
 /// Switch to the given next task.
@@ -125,8 +123,7 @@ fn switch_to(next_task: Arc<Task>) {
     panic_if_in_atomic();
     let next_task_ctx = &next_task.context() as *const TaskContext;
 
-    let current_task_ctx = CpuLocal::borrow_with(&PROCESSOR, |processor| {
-        let processor = &mut processor.borrow_mut();
+    let current_task_ctx = PROCESSOR.with_borrow_mut(|processor| {
         let cur_task = processor.current.replace(next_task);
 
         match cur_task {
@@ -152,6 +149,6 @@ fn switch_to(next_task: Arc<Task>) {
 fn scheduler_tick() {
     let disable_irq = disable_local();
     if with_current(|_| {}).is_some() {
-        locked_global_scheduler().tick_cur_task();
+        GLOBAL_SCHEDULER.tick_cur_task();
     }
 }

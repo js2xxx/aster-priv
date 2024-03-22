@@ -131,6 +131,7 @@ fn build_kernel_elf(
         &env_rustflags,
         "-C link-arg=-Tx86_64.ld",
         "-C code-model=kernel",
+        "-Z tls-model=local-exec",
         "-C relocation-model=static",
         "-Z relro-level=off",
     ]);

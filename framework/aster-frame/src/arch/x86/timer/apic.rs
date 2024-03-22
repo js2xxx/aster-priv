@@ -17,12 +17,9 @@ use x86::{
 use super::TIMER_FREQ;
 use crate::{
     arch::{
-        kernel::tsc::init_tsc_freq,
+        kernel::{apic::with_apic, tsc::init_tsc_freq},
         timer::pit::OperatingMode,
-        x86::kernel::{
-            apic::{DivideConfig, APIC_INSTANCE},
-            tsc::TSC_FREQ,
-        },
+        x86::kernel::{apic::DivideConfig, tsc::TSC_FREQ},
     },
     trap::IrqLine,
 };
@@ -48,10 +45,11 @@ fn is_tsc_deadline_mode_supported() -> bool {
 }
 
 fn init_tsc_mode() {
-    let mut apic_lock = APIC_INSTANCE.get().unwrap().lock();
     // Enable tsc deadline mode
-    apic_lock.set_lvt_timer(super::TIMER_IRQ_NUM.load(Ordering::Relaxed) as u64 | (1 << 18));
-    drop(apic_lock);
+    with_apic(|apic| {
+        apic.set_lvt_timer(super::TIMER_IRQ_NUM.load(Ordering::Relaxed) as u64 | (1 << 18))
+    });
+
     let tsc_step = TSC_FREQ.load(Ordering::Relaxed) / TIMER_FREQ;
 
     let callback = move || unsafe {
@@ -74,10 +72,10 @@ fn init_periodic_mode() {
     super::pit::enable_ioapic_line(irq.clone());
 
     // Set APIC timer count
-    let mut apic_lock = APIC_INSTANCE.get().unwrap().lock();
-    apic_lock.set_timer_div_config(DivideConfig::Divide64);
-    apic_lock.set_timer_init_count(0xFFFF_FFFF);
-    drop(apic_lock);
+    with_apic(|apic| {
+        apic.set_timer_div_config(DivideConfig::Divide64);
+        apic.set_timer_init_count(0xFFFF_FFFF);
+    });
 
     static IS_FINISH: AtomicBool = AtomicBool::new(false);
     x86_64::instructions::interrupts::enable();
@@ -95,8 +93,7 @@ fn init_periodic_mode() {
 
         if IN_TIME.load(Ordering::Relaxed) < CALLBACK_TIMES || IS_FINISH.load(Ordering::Acquire) {
             if IN_TIME.load(Ordering::Relaxed) == 0 {
-                let apic_lock = APIC_INSTANCE.get().unwrap().lock();
-                let remain_ticks = apic_lock.timer_current_count();
+                let remain_ticks = with_apic(|apic| apic.timer_current_count());
                 APIC_FIRST_COUNT.store(0xFFFF_FFFF - remain_ticks, Ordering::Relaxed);
             }
             IN_TIME.fetch_add(1, Ordering::Relaxed);
@@ -105,20 +102,22 @@ fn init_periodic_mode() {
 
         // Stop PIT and APIC Timer
         super::pit::disable_ioapic_line();
-        let mut apic_lock = APIC_INSTANCE.get().unwrap().lock();
-        let remain_ticks = apic_lock.timer_current_count();
-        apic_lock.set_timer_init_count(0);
+        with_apic(|apic| {
+            let remain_ticks = apic.timer_current_count();
+            apic.set_timer_init_count(0);
 
-        // Init APIC Timer
-        let ticks = (0xFFFF_FFFF - remain_ticks - APIC_FIRST_COUNT.load(Ordering::Relaxed))
-            / CALLBACK_TIMES;
-        apic_lock.set_timer_init_count(ticks);
-        apic_lock.set_lvt_timer(super::TIMER_IRQ_NUM.load(Ordering::Relaxed) as u64 | (1 << 17));
-        apic_lock.set_timer_div_config(DivideConfig::Divide64);
-        info!(
-            "APIC Timer ticks count:{:x}, remain ticks: {:x},Timer Freq:{} Hz",
-            ticks, remain_ticks, TIMER_FREQ
-        );
+            // Init APIC Timer
+            let ticks = (0xFFFF_FFFF - remain_ticks - APIC_FIRST_COUNT.load(Ordering::Relaxed))
+                / CALLBACK_TIMES;
+            apic.set_timer_init_count(ticks);
+            apic.set_lvt_timer(super::TIMER_IRQ_NUM.load(Ordering::Relaxed) as u64 | (1 << 17));
+            apic.set_timer_div_config(DivideConfig::Divide64);
+
+            info!(
+                "APIC Timer ticks count:{:x}, remain ticks: {:x},Timer Freq:{} Hz",
+                ticks, remain_ticks, TIMER_FREQ
+            );
+        });
         IS_FINISH.store(true, Ordering::Release);
     }
 }
