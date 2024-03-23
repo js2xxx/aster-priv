@@ -5,7 +5,7 @@ use core::cell::RefCell;
 
 use super::{
     preempt::{
-        activate_preemption, deactivate_preemption, in_atomic, is_preemptible, panic_if_in_atomic,
+        activate_preemption, deactivate_preemption, in_atomic, panic_if_in_atomic,
         panic_if_not_preemptible,
     },
     scheduler::{add_task, pick_next_task, GLOBAL_SCHEDULER},
@@ -58,11 +58,11 @@ pub fn with_current<T>(f: impl FnOnce(&Arc<Task>) -> T) -> Option<T> {
 ///
 /// Note that this method cannot be simply named "yield" as the name is
 /// a Rust keyword.
-pub fn yield_now() {
+pub fn yield_now() -> bool {
     if with_current(|_| {}).is_some() {
         GLOBAL_SCHEDULER.prepare_to_yield_cur_task();
     }
-    schedule();
+    schedule()
 }
 
 // FIXME: remove this func after merging #632.
@@ -78,29 +78,20 @@ pub fn yield_to(task: Arc<Task>) {
 
 /// Switch to the next task selected by the global scheduler if it should.
 pub fn schedule() -> bool {
-    if !is_preemptible() {
-        return false;
-        // panic!("schedule() is called under a non-preemptible context.");
-    }
-    deactivate_preemption();
+    panic_if_not_preemptible();
 
-    let ret = should_preempt_cur_task();
+    deactivate_preemption();
+    let mut ret = should_preempt_cur_task();
     if ret {
-        switch_to_next();
+        match pick_next_task() {
+            None => ret = false,
+            Some(next_task) => switch_to(next_task),
+        }
     }
     activate_preemption();
 
     panic_if_not_preemptible();
     ret
-}
-
-fn switch_to_next() {
-    match pick_next_task() {
-        None => {
-            // TODO: idle_balance across cpus
-        }
-        Some(next_task) => switch_to(next_task),
-    }
 }
 
 fn should_preempt_cur_task() -> bool {

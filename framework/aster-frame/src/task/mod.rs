@@ -13,7 +13,7 @@ pub use self::{
     preempt::{in_atomic, is_preemptible, DisablePreemptGuard},
     priority::Priority,
     processor::{current_task, schedule, with_current, yield_now, yield_to},
-    scheduler::{add_task, clear_task, set_scheduler, Scheduler},
+    scheduler::{add_task, clear_task, set_scheduler, Scheduler, trigger_load_balancing},
     task::{
         Current, NeedResched, ReadPriority, SchedTaskBase, Task, TaskAdapter, TaskOptions,
         TaskStatus, WakeUp,

@@ -25,6 +25,7 @@ use aster_frame::{
     arch::qemu::{exit_qemu, QemuExitCode},
     boot,
     cpu::{this_cpu, CpuSet},
+    task::Priority,
 };
 use process::Process;
 
@@ -105,11 +106,7 @@ fn init_thread() {
     .expect("Run init process failed.");
 
     // Wait till initproc become zombie.
-    while !initproc.is_zombie() {
-        // We don't have preemptive scheduler now.
-        // The long running init thread should yield its own execution to allow other tasks to go on.
-        Thread::yield_now();
-    }
+    idle_while(|| !initproc.is_zombie());
 
     // TODO: exit via qemu isa debug device should not be the only way.
     let exit_code = if initproc.exit_code().unwrap() == 0 {
@@ -127,7 +124,9 @@ static START_SPAWNING: AtomicBool = AtomicBool::new(false);
 pub fn run_first_process() -> ! {
     START_SPAWNING.store(true, atomic::Ordering::Release);
     Thread::spawn_kernel_thread(
-        ThreadOptions::new(init_thread).cpu_affinity(CpuSet::single(this_cpu())),
+        ThreadOptions::new(init_thread)
+            .cpu_affinity(CpuSet::single(this_cpu()))
+            .priority(Priority::lowest()),
     );
     unreachable!()
 }
@@ -144,12 +143,13 @@ fn __aster_ap_entry() -> ! {
             this_cpu(),
             current_thread!().tid()
         );
-        loop {
-            Thread::yield_now()
-        }
+        idle_while(|| true);
+        unreachable!()
     };
     Thread::spawn_kernel_thread(
-        ThreadOptions::new(thread_main).cpu_affinity(CpuSet::single(this_cpu())),
+        ThreadOptions::new(thread_main)
+            .cpu_affinity(CpuSet::single(this_cpu()))
+            .priority(Priority::lowest()),
     );
     unreachable!()
 }
@@ -165,4 +165,38 @@ fn print_banner() {
 "
     );
     println!("\x1B[0m");
+}
+
+fn idle_while(mut cond: impl FnMut() -> bool) {
+    const MAX_SPIN_SHIFT: usize = 16;
+    const MAX_YIELD_COUNT: usize = 61;
+
+    let mut spin_shift = 0;
+    let mut yield_count = 0;
+    let cpu = this_cpu();
+    loop {
+        if !cond() {
+            break;
+        }
+        if Thread::yield_now() {
+            spin_shift = 0;
+            if yield_count == MAX_YIELD_COUNT {
+                yield_count = 0;
+            } else {
+                yield_count += 1;
+                continue;
+            }
+        }
+
+        for _ in 0..(1 << spin_shift) {
+            hint::spin_loop();
+        }
+        if spin_shift < MAX_SPIN_SHIFT {
+            spin_shift += 1;
+        }
+        if !cond() {
+            break;
+        }
+        aster_frame::task::trigger_load_balancing();
+    }
 }

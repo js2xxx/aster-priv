@@ -76,6 +76,8 @@ pub trait Scheduler<T: ?Sized + SchedTaskBase = Task>: Sync + Send {
     // FIXME: remove this after merging #632.
     /// Yield the current task to the given task at best effort.
     fn prepare_to_yield_to(&self, task: Arc<T>);
+
+    fn load_balance(&self) {}
 }
 
 pub struct GlobalScheduler {
@@ -156,4 +158,10 @@ pub fn add_task(task: Arc<Task>) {
 pub fn clear_task(task: &Arc<Task>) {
     GLOBAL_SCHEDULER.clear(task);
     sched_debug!("remove task: {:p}", Arc::as_ptr(task));
+}
+
+pub fn trigger_load_balancing() {
+    if let Some(sched) = GLOBAL_SCHEDULER.scheduler.get() {
+        sched.load_balance()
+    }
 }

@@ -82,8 +82,8 @@ impl Thread {
         &self.status
     }
 
-    pub fn yield_now() {
-        yield_now();
+    pub fn yield_now() -> bool {
+        yield_now()
     }
 
     pub fn tid(&self) -> Tid {

@@ -73,10 +73,7 @@ pub fn sys_futex(
     };
     let res = match res {
         Ok(res) => res,
-        Err(err) => {
-            log::error!("{err:?}");
-            -(err.error() as i32) as isize
-        }
+        Err(err) => -(err.error() as i32) as isize,
     };
 
     debug!("futex returns, tid= {} ", current_thread!().tid());

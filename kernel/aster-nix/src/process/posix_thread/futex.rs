@@ -272,7 +272,7 @@ impl FutexItem {
         FutexItem {
             key,
             bitset,
-            waiter: Arc::new(Waiter::new()),
+            waiter: Arc::new(Waiter::new().unwrap()),
         }
     }
 

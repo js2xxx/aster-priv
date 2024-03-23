@@ -302,7 +302,7 @@ pub fn init() -> Result<(), ApicInitError> {
 #[allow(dropping_references)]
 pub fn init_ap() {
     if let Some(apic_type) = APIC_TYPE.get() {
-        assert!(APIC_INSTANCE.with(|a| a.get().is_none()));
+        debug_assert!(APIC_INSTANCE.with(|a| a.get().is_none()));
         match apic_type {
             ApicType::X2Apic => {
                 let mut x2apic = x2apic::X2Apic::new().unwrap();

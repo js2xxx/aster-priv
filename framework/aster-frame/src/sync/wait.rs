@@ -2,8 +2,7 @@
 
 use alloc::{collections::VecDeque, sync::Arc};
 use core::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    sync::atomic::{AtomicBool, Ordering}, time::Duration
 };
 
 use bitflags::bitflags;
@@ -63,11 +62,17 @@ impl WaitQueue {
     where
         F: FnMut() -> Option<R>,
     {
-        if let Some(res) = cond() {
-            return Some(res);
-        }
+        let waiter = loop {
+            if let Some(res) = cond() {
+                return Some(res);
+            }
 
-        let waiter = Arc::new(Waiter::new());
+            if let Some(waiter) = Waiter::new() {
+                break Arc::new(waiter);
+            }
+            yield_now();
+        };
+
         self.enqueue(&waiter);
 
         let timer_callback = timeout.map(|timeout| {
@@ -176,12 +181,12 @@ impl core::fmt::Debug for Waiter {
 }
 
 impl Waiter {
-    pub fn new() -> Self {
-        Waiter {
+    pub fn new() -> Option<Self> {
+        current_task().map(|task| Waiter {
             is_woken_up: AtomicBool::new(false),
             flag: WaiterFlag::empty(),
-            task: current_task().unwrap(),
-        }
+            task,
+        })
     }
 
     /// make self into wait status until be called wake up
@@ -210,12 +215,6 @@ impl Waiter {
 
     pub fn is_exclusive(&self) -> bool {
         self.flag.contains(WaiterFlag::EXCLUSIVE)
-    }
-}
-
-impl Default for Waiter {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

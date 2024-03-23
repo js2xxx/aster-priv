@@ -20,11 +20,11 @@ impl Priority {
     }
 
     pub const fn low() -> Self {
-        Self::new(110)
+        Self::new(130)
     }
 
     pub const fn normal() -> Self {
-        Self::new(100)
+        Self::new(120)
     }
 
     pub const fn high() -> Self {
@@ -53,7 +53,7 @@ impl Priority {
         if self.is_real_time() {
             None
         } else {
-            Some((self.0 as i8 - Priority::normal().get() as i8) - 20)
+            Some((self.0 as i8 - 100) - 20)
         }
     }
 }
