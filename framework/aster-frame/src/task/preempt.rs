@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::{
-    cell::Cell,
-    sync::atomic::{AtomicBool, Ordering::Relaxed},
-};
+use core::{cell::Cell, marker::PhantomData};
 
-use crate::arch::irq::{
-    disable_local as disable_local_irq, enable_local as enable_local_irq,
-    is_local_enabled as is_local_irq_enabled,
-};
+use crate::arch::irq::{disable_local as disable_local_irq, enable_local as enable_local_irq};
 
 #[thread_local]
 static PREEMPT_INFO: PreemptInfo = PreemptInfo::new();
@@ -18,14 +12,14 @@ static PREEMPT_INFO: PreemptInfo = PreemptInfo::new();
 struct PreemptInfo {
     /// The number of locks and irq-disabled contexts held by the current CPU.
     num: Cell<usize>,
-    in_preemption: AtomicBool,
+    in_preemption: Cell<bool>,
 }
 
 impl PreemptInfo {
     const fn new() -> Self {
         Self {
             num: Cell::new(0),
-            in_preemption: AtomicBool::new(false),
+            in_preemption: Cell::new(false),
         }
     }
 
@@ -39,31 +33,25 @@ impl PreemptInfo {
         get
     }
 
-    fn dec_num(&self) -> usize {
-        let get = self.num.get();
-        self.num.set(get - 1);
-        get
+    fn dec_num(&self) {
+        self.num.set(self.num.get() - 1);
     }
 
     fn in_preemption(&self) -> bool {
-        self.in_preemption.load(Relaxed)
+        self.in_preemption.get()
     }
 
     fn activate(&self) {
-        self.in_preemption.store(false, Relaxed);
-        if !is_local_irq_enabled() {
-            enable_local_irq();
-        }
+        self.in_preemption.set(false);
+        enable_local_irq();
     }
 
     fn deactivate(&self) {
-        if self.in_preemption.load(Relaxed) {
+        if self.in_preemption.get() {
             panic!("Nested preemption is not allowed on in_preemption flag.");
         }
-        if is_local_irq_enabled() {
-            disable_local_irq();
-        }
-        self.in_preemption.store(true, Relaxed);
+        disable_local_irq();
+        self.in_preemption.set(true);
     }
 
     fn is_preemptible(&self) -> bool {
@@ -79,47 +67,34 @@ impl PreemptInfo {
 }
 
 /// A private type to prevent user from constructing DisablePreemptGuard directly.
-struct _Guard {
-    /// This private field prevents user from constructing values of this type directly.
-    _private: (),
-}
-impl !Send for _Guard {}
+struct _Guard(PhantomData<*mut ()>);
 
 /// A guard to disable preempt.
-#[allow(private_interfaces)]
 #[clippy::has_significant_drop]
-pub enum DisablePreemptGuard {
-    Lock(_Guard),
-    Irq(_Guard),
-    Sched(_Guard),
-}
-impl !Send for DisablePreemptGuard {}
+pub struct DisablePreemptGuard(PhantomData<*mut ()>);
 
 impl DisablePreemptGuard {
-    pub fn for_irq() -> Self {
+    pub fn new() -> Self {
         PREEMPT_INFO.inc_num();
-        Self::Irq(_Guard { _private: () })
-    }
-
-    pub fn for_lock() -> Self {
-        PREEMPT_INFO.inc_num();
-        Self::Lock(_Guard { _private: () })
+        Self(PhantomData)
     }
 
     /// Transfer this guard to a new guard.
     /// This guard must be dropped after this function.
     pub fn transfer_to(&self) -> Self {
-        assert!(matches!(self, Self::Lock(_)));
-        Self::for_lock()
+        Self::new()
+    }
+}
+
+impl Default for DisablePreemptGuard {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 impl Drop for DisablePreemptGuard {
     fn drop(&mut self) {
-        match self {
-            Self::Irq(_) | Self::Lock(_) => _ = PREEMPT_INFO.dec_num(),
-            Self::Sched(_) => PREEMPT_INFO.activate(),
-        }
+        PREEMPT_INFO.dec_num()
     }
 }
 
@@ -152,12 +127,25 @@ pub fn deactivate_preemption() {
 }
 
 // TODO: impl might_sleep
+#[track_caller]
 pub fn panic_if_in_atomic() {
     if !in_atomic() {
         return;
     }
     panic!(
-        "The CPU is not atomic: PREEMPT_INFO was {} with the in_preemption flag as {}.",
+        "The CPU is in atomic: PREEMPT_INFO was {} with the in_preemption flag as {}.",
+        PREEMPT_INFO.num(),
+        PREEMPT_INFO.in_preemption()
+    );
+}
+
+#[track_caller]
+pub fn panic_if_not_preemptible() {
+    if is_preemptible() {
+        return;
+    }
+    panic!(
+        "The CPU is not preemptible: PREEMPT_INFO was {} with the in_preemption flag as {}.",
         PREEMPT_INFO.num(),
         PREEMPT_INFO.in_preemption()
     );

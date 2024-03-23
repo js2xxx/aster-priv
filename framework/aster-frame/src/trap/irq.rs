@@ -1,13 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::fmt::Debug;
+use core::{cell::Cell, fmt::Debug, marker::PhantomData};
 
 use trapframe::TrapFrame;
 
 use crate::{
     arch::irq::{self, IrqCallbackHandle, NOT_USING_IRQ},
     prelude::*,
-    task::DisablePreemptGuard,
     Error,
 };
 
@@ -120,42 +119,44 @@ pub fn is_local_enabled() -> bool {
     irq::is_local_enabled()
 }
 
+#[thread_local]
+static IRQ_DISABLED_COUNT: Cell<u32> = Cell::new(0);
+
 /// A guard for disabled local IRQs.
 pub struct DisabledLocalIrqGuard {
     was_enabled: bool,
-    preempt_guard: DisablePreemptGuard,
+    marker: PhantomData<*mut ()>,
 }
-
-impl !Send for DisabledLocalIrqGuard {}
 
 impl DisabledLocalIrqGuard {
     fn new() -> Self {
-        let was_enabled = irq::is_local_enabled();
-        if was_enabled {
+        let count = IRQ_DISABLED_COUNT.get();
+        IRQ_DISABLED_COUNT.set(count + 1);
+        let was_enabled = if count == 0 {
+            let ret = irq::is_local_enabled();
             irq::disable_local();
-        }
-        let preempt_guard = DisablePreemptGuard::for_irq();
+            ret
+        } else {
+            false
+        };
         Self {
             was_enabled,
-            preempt_guard,
+            marker: PhantomData,
         }
     }
 
     /// Transfer the saved IRQ status of this guard to a new guard.
     /// The saved IRQ status of this guard is cleared.
     pub fn transfer_to(&mut self) -> Self {
-        let was_enabled = self.was_enabled;
-        self.was_enabled = false;
-        Self {
-            was_enabled,
-            preempt_guard: DisablePreemptGuard::for_lock(),
-        }
+        Self::new()
     }
 }
 
 impl Drop for DisabledLocalIrqGuard {
     fn drop(&mut self) {
-        if self.was_enabled {
+        let count = IRQ_DISABLED_COUNT.get() - 1;
+        IRQ_DISABLED_COUNT.set(count);
+        if count == 0 && self.was_enabled {
             irq::enable_local();
         }
     }

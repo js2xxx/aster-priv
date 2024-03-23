@@ -80,9 +80,8 @@ pub(crate) fn call_irq_callback_functions(trap_frame: &TrapFrame) {
     IN_INTERRUPT_CONTEXT.set(true);
 
     let irq_line = IRQ_LIST.get().unwrap().get(trap_frame.trap_num).unwrap();
-    let callback_functions = irq_line.callback_list();
-    for callback_function in callback_functions.iter() {
-        callback_function.call(trap_frame);
+    for cb in &*irq_line.callback_list() {
+        cb.call(trap_frame)
     }
     if !CpuException::is_cpu_exception(trap_frame.trap_num as u16) {
         crate::arch::interrupts_ack();

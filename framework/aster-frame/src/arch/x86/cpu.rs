@@ -108,6 +108,8 @@ impl UserContext {
 
 impl UserContextApiInternal for UserContext {
     fn execute(&mut self) -> Option<crate::user::UserEvent> {
+        crate::arch::irq::disable_local();
+
         // set interrupt flag so that in user mode it can receive external interrupts
         // set ID flag which means cpu support CPUID instruction
         self.user_context.general.rflags |= (RFlags::INTERRUPT_FLAG | RFlags::ID).bits() as usize;

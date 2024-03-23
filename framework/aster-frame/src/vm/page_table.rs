@@ -411,7 +411,7 @@ pub unsafe fn table_of<'a, T: PageTableEntryTrait>(pa: Paddr) -> Option<&'a mut 
 
 /// translate a virtual address to physical address which cannot use offset to get physical address
 pub fn vaddr_to_paddr(vaddr: Vaddr) -> Option<Paddr> {
-    let mut page_table = KERNEL_PAGE_TABLE.get().unwrap().lock();
+    let mut page_table = KERNEL_PAGE_TABLE.get().unwrap().lock_irq_disabled();
     // Although we bypass the unsafe APIs provided by KernelMode, the purpose here is
     // only to obtain the corresponding physical address according to the mapping.
     let last_entry = page_table.page_walk(vaddr, false)?;

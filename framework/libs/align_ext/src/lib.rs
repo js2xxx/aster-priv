@@ -57,7 +57,7 @@ macro_rules! impl_align_ext {
 
                 #[inline]
                 fn align_up(self, align: Self) -> Self {
-                    assert!(align.is_power_of_two() && align >= 2);
+                    assert!(align.is_power_of_two() && align >= 2, "invalid align: {align}");
                     self.checked_add(align - 1).unwrap() & !(align - 1)
                 }
 

@@ -4,7 +4,7 @@
 
 use aster_frame::{config::PAGE_SIZE, Error, Result};
 
-use super::Vmar;
+use super::{Vmar, VmarRightsOp};
 
 /// Options for allocating a child VMAR, which must not overlap with any
 /// existing mappings or child VMARs.
@@ -95,7 +95,10 @@ impl<R> VmarChildOptions<R> {
     /// # Access rights
     ///
     /// The child VMAR is initially assigned all the parent's access rights.
-    pub fn alloc(self) -> Result<Vmar<R>> {
+    pub fn alloc(self) -> Result<Vmar<R>>
+    where
+        Vmar<R>: VmarRightsOp,
+    {
         // check align
         let align = if let Some(align) = self.align {
             debug_assert!(align % PAGE_SIZE == 0);

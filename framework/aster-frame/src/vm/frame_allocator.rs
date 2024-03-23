@@ -39,7 +39,12 @@ pub(crate) fn alloc(nframes: usize, flags: VmFrameFlags) -> Option<VmFrameVec> {
 }
 
 pub(crate) fn alloc_single(flags: VmFrameFlags) -> Option<VmFrame> {
-    FRAME_ALLOCATOR.get().unwrap().lock().alloc(1).map(|idx|
+    FRAME_ALLOCATOR
+        .get()
+        .unwrap()
+        .lock_irq_disabled()
+        .alloc(1)
+        .map(|idx|
             // Safety: The frame index is valid.
             unsafe { VmFrame::new(idx * PAGE_SIZE, flags.union(VmFrameFlags::NEED_DEALLOC)) })
 }
@@ -48,7 +53,7 @@ pub(crate) fn alloc_contiguous(nframes: usize, flags: VmFrameFlags) -> Option<Vm
     FRAME_ALLOCATOR
         .get()
         .unwrap()
-        .lock()
+        .lock_irq_disabled()
         .alloc(nframes)
         .map(|start|
             // Safety: The range of page frames is contiguous and valid.
@@ -68,7 +73,11 @@ pub(crate) fn alloc_contiguous(nframes: usize, flags: VmFrameFlags) -> Option<Vm
 /// User should ensure the index is valid
 ///
 pub(crate) unsafe fn dealloc_single(index: usize) {
-    FRAME_ALLOCATOR.get().unwrap().lock().dealloc(index, 1);
+    FRAME_ALLOCATOR
+        .get()
+        .unwrap()
+        .lock_irq_disabled()
+        .dealloc(index, 1);
 }
 
 /// Deallocate a contiguous range of page frames.
@@ -81,7 +90,7 @@ pub(crate) unsafe fn dealloc_contiguous(start_index: usize, nframes: usize) {
     FRAME_ALLOCATOR
         .get()
         .unwrap()
-        .lock()
+        .lock_irq_disabled()
         .dealloc(start_index, nframes);
 }
 

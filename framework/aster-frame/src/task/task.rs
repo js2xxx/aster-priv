@@ -108,7 +108,7 @@ impl KernelStack {
     }
 
     fn protect_guard_page(stack_segment: &VmSegment, flags: PageTableFlags) -> PageTableFlags {
-        let mut kernel_pt = KERNEL_PAGE_TABLE.get().unwrap().lock();
+        let mut kernel_pt = KERNEL_PAGE_TABLE.get().unwrap().lock_irq_disabled();
         let guard_page_vaddr = {
             let guard_page_paddr = stack_segment.start_paddr();
             crate::vm::paddr_to_vaddr(guard_page_paddr)

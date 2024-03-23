@@ -6,11 +6,12 @@ use core::cell::RefCell;
 use super::{
     preempt::{
         activate_preemption, deactivate_preemption, in_atomic, is_preemptible, panic_if_in_atomic,
+        panic_if_not_preemptible,
     },
     scheduler::{add_task, pick_next_task, GLOBAL_SCHEDULER},
     task::{context_switch, NeedResched, Task, TaskContext},
 };
-use crate::{arch::timer::register_scheduler_tick, cpu_local, trap::disable_local};
+use crate::{arch::timer::register_scheduler_tick, cpu_local};
 
 #[derive(Default)]
 pub struct Processor {
@@ -66,18 +67,20 @@ pub fn yield_now() {
 
 // FIXME: remove this func after merging #632.
 pub fn yield_to(task: Arc<Task>) {
-    if with_current(|_| {}).is_some() {
-        GLOBAL_SCHEDULER.prepare_to_yield_to(task);
-    } else {
-        add_task(task);
-    }
-    schedule();
+    panic_if_not_preemptible();
+
+    deactivate_preemption();
+    switch_to(task);
+    activate_preemption();
+
+    panic_if_not_preemptible();
 }
 
 /// Switch to the next task selected by the global scheduler if it should.
 pub fn schedule() -> bool {
     if !is_preemptible() {
-        panic!("schedule() is called under a non-preemptible context.");
+        return false;
+        // panic!("schedule() is called under a non-preemptible context.");
     }
     deactivate_preemption();
 
@@ -86,6 +89,8 @@ pub fn schedule() -> bool {
         switch_to_next();
     }
     activate_preemption();
+
+    panic_if_not_preemptible();
     ret
 }
 
@@ -94,9 +99,7 @@ fn switch_to_next() {
         None => {
             // TODO: idle_balance across cpus
         }
-        Some(next_task) => {
-            switch_to(next_task);
-        }
+        Some(next_task) => switch_to(next_task),
     }
 }
 
@@ -121,7 +124,7 @@ fn should_preempt_cur_task() -> bool {
 /// This method should be called with preemption guard.
 fn switch_to(next_task: Arc<Task>) {
     panic_if_in_atomic();
-    let next_task_ctx = &next_task.context() as *const TaskContext;
+    let next_task_ctx = next_task.context();
 
     let (current_task_ctx, cur_task) = PROCESSOR.with_borrow_mut(|processor| {
         let cur_task = processor.current.replace(next_task);
@@ -138,13 +141,12 @@ fn switch_to(next_task: Arc<Task>) {
         }
     }
     unsafe {
-        context_switch(current_task_ctx, next_task_ctx);
+        context_switch(current_task_ctx, &next_task_ctx);
     }
 }
 
 /// Called by the timer handler at every TICK update.
 fn scheduler_tick() {
-    let disable_irq = disable_local();
     if with_current(|_| {}).is_some() {
         GLOBAL_SCHEDULER.tick_cur_task();
     }

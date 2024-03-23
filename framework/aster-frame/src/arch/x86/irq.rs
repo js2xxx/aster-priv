@@ -27,7 +27,9 @@ pub(crate) fn init() {
     IRQ_LIST.call_once(|| list);
 }
 
+#[track_caller]
 pub(crate) fn enable_local() {
+    assert!(!crate::task::in_atomic());
     x86_64::instructions::interrupts::enable();
     // When emulated with QEMU, interrupts may not be delivered if a STI instruction is immediately
     // followed by a RET instruction. It is a BUG of QEMU, see the following patch for details.

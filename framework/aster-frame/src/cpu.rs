@@ -11,7 +11,7 @@ use core::{
 use bitvec::{order::Lsb0, slice::IterOnes, vec::BitVec};
 use x86::msr::{wrmsr, IA32_TSC_AUX};
 
-use crate::{config::PAGE_SIZE, trap::disable_local, vm::VmAllocOptions};
+use crate::{config::PAGE_SIZE, task::DisablePreemptGuard, trap::disable_local, vm::VmAllocOptions};
 
 cfg_if::cfg_if! {
     if #[cfg(target_arch = "x86_64")]{
@@ -161,7 +161,8 @@ impl<T> CpuLocal<T> {
     pub fn with<U, F: FnOnce(&T) -> U>(&self, f: F) -> U {
         // Disable interrupts when accessing cpu-local variable
         // Preemption is also disabled in `disable_local()`.
-        let _guard = disable_local();
+        let _local = disable_local();
+        let _preempt = DisablePreemptGuard::new();
         // Safety. Now that the local IRQs are disabled, this CPU-local object can only be
         // accessed by the current task/thread. So it is safe to get its immutable reference
         // regardless of whether `T` implements `Sync` or not.

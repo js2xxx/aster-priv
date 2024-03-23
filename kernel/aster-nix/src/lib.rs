@@ -4,7 +4,6 @@
 #![no_std]
 #![deny(unsafe_code)]
 #![allow(dead_code)]
-#![allow(incomplete_features)]
 #![allow(unused_variables)]
 #![feature(btree_cursors)]
 #![feature(btree_extract_if)]
@@ -16,13 +15,11 @@
 #![feature(let_chains)]
 #![feature(linked_list_remove)]
 #![feature(register_tool)]
-// FIXME: This feature is used to support vm capbility now as a work around.
-// Since this is an incomplete feature, use this feature is unsafe.
-// We should find a proper method to replace this feature with min_specialization, which is a sound feature.
-#![feature(specialization)]
 #![feature(step_trait)]
 #![feature(trait_alias)]
 #![register_tool(component_access_control)]
+
+use core::{hint, sync::atomic::AtomicBool};
 
 use aster_frame::{
     arch::qemu::{exit_qemu, QemuExitCode},
@@ -123,16 +120,38 @@ fn init_thread() {
     exit_qemu(exit_code);
 }
 
+static START_SPAWNING: AtomicBool = AtomicBool::new(false);
+
 /// first process never return
 #[controlled]
 pub fn run_first_process() -> ! {
+    START_SPAWNING.store(true, atomic::Ordering::Release);
     Thread::spawn_kernel_thread(
         ThreadOptions::new(init_thread).cpu_affinity(CpuSet::single(this_cpu())),
     );
-    loop {
-        Thread::yield_now();
-        core::hint::spin_loop();
+    unreachable!()
+}
+
+#[no_mangle]
+#[allow(unsafe_code)]
+fn __aster_ap_entry() -> ! {
+    while !START_SPAWNING.load(atomic::Ordering::Acquire) {
+        hint::spin_loop()
     }
+    let thread_main = || {
+        println!(
+            "[kernel] Spawn idle thread for CPU#{}, tid = {}",
+            this_cpu(),
+            current_thread!().tid()
+        );
+        loop {
+            Thread::yield_now()
+        }
+    };
+    Thread::spawn_kernel_thread(
+        ThreadOptions::new(thread_main).cpu_affinity(CpuSet::single(this_cpu())),
+    );
+    unreachable!()
 }
 
 fn print_banner() {

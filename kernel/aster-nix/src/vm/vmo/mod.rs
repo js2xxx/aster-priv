@@ -95,21 +95,6 @@ pub trait VmoRightsOp {
         Self: Sized;
 }
 
-// We implement this trait for Vmo, so we can use functions on type like Vmo<R> without trait bounds.
-// FIXME: This requires the imcomplete feature specialization, which should be fixed further.
-impl<R> VmoRightsOp for Vmo<R> {
-    default fn rights(&self) -> Rights {
-        unimplemented!()
-    }
-
-    default fn to_dyn(self) -> Vmo<Rights>
-    where
-        Self: Sized,
-    {
-        unimplemented!()
-    }
-}
-
 bitflags! {
     /// VMO flags.
     pub struct VmoFlags: u32 {

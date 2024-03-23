@@ -1,8 +1,5 @@
 use alloc::collections::BTreeMap;
-use core::{
-    hint,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use spin::Once;
 
@@ -75,8 +72,8 @@ fn ap_early_entry(local_apic_id: u32) -> ! {
 
     log::info!("CPU#{} is online", crate::cpu::this_cpu());
 
-    loop {
-        crate::task::yield_now();
-        hint::spin_loop();
+    extern "C" {
+        fn __aster_ap_entry() -> !;
     }
+    unsafe { __aster_ap_entry() }
 }

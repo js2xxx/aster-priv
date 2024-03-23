@@ -64,7 +64,10 @@ impl Interval<usize> for Arc<VmMapping> {
 }
 
 impl VmMapping {
-    pub fn build_mapping<R1, R2>(option: VmarMapOptions<R1, R2>) -> Result<Self> {
+    pub fn build_mapping<R1, R2>(option: VmarMapOptions<R1, R2>) -> Result<Self>
+    where
+        Vmo<R2>: VmoRightsOp,
+    {
         let VmarMapOptions {
             parent,
             vmo,
@@ -507,7 +510,10 @@ pub struct VmarMapOptions<R1, R2> {
     can_overwrite: bool,
 }
 
-impl<R1, R2> VmarMapOptions<R1, R2> {
+impl<R1, R2> VmarMapOptions<R1, R2>
+where
+    Vmo<R2>: VmoRightsOp,
+{
     /// Creates a default set of options with the VMO and the memory access
     /// permissions.
     ///
@@ -633,7 +639,10 @@ impl<R1, R2> VmarMapOptions<R1, R2> {
     }
 
     /// check whether the vmperm is subset of vmo rights
-    fn check_perms(&self) -> Result<()> {
+    fn check_perms(&self) -> Result<()>
+    where
+        Vmo<R2>: VmoRightsOp,
+    {
         let perm_rights = Rights::from(self.perms);
         self.vmo.check_rights(perm_rights)
     }

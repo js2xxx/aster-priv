@@ -37,7 +37,7 @@ impl JobControl {
 
     /// Returns the session whose controlling terminal is the terminal.
     fn session(&self) -> Option<Arc<Session>> {
-        self.session.lock().upgrade()
+        self.session.lock_irq_disabled().upgrade()
     }
 
     /// Sets the terminal as the controlling terminal of the `session`.
@@ -47,7 +47,7 @@ impl JobControl {
     /// This terminal should not belong to any session.
     pub fn set_session(&self, session: &Arc<Session>) {
         debug_assert!(self.session().is_none());
-        *self.session.lock() = Arc::downgrade(session);
+        *self.session.lock_irq_disabled() = Arc::downgrade(session);
     }
 
     /// Sets the terminal as the controlling terminal of the session of current process.
@@ -66,10 +66,10 @@ impl JobControl {
         let current = current!();
 
         let process_group = current.process_group().unwrap();
-        *self.foreground.lock() = Arc::downgrade(&process_group);
+        *self.foreground.lock_irq_disabled() = Arc::downgrade(&process_group);
 
         let session = current.session().unwrap();
-        *self.session.lock() = Arc::downgrade(&session);
+        *self.session.lock_irq_disabled() = Arc::downgrade(&session);
 
         self.pauser.resume_all();
         Ok(())
@@ -96,7 +96,7 @@ impl JobControl {
 
     /// Returns the foreground process group
     pub fn foreground(&self) -> Option<Arc<ProcessGroup>> {
-        self.foreground.lock().upgrade()
+        self.foreground.lock_irq_disabled().upgrade()
     }
 
     /// Sets the foreground process group.
@@ -107,7 +107,7 @@ impl JobControl {
     pub fn set_foreground(&self, process_group: Option<&Arc<ProcessGroup>>) -> Result<()> {
         let Some(process_group) = process_group else {
             // FIXME: should we allow this branch?
-            *self.foreground.lock() = Weak::new();
+            *self.foreground.lock_irq_disabled() = Weak::new();
             return Ok(());
         };
 
@@ -126,7 +126,7 @@ impl JobControl {
             );
         }
 
-        *self.foreground.lock() = Arc::downgrade(process_group);
+        *self.foreground.lock_irq_disabled() = Arc::downgrade(process_group);
         self.pauser.resume_all();
         Ok(())
     }

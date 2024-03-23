@@ -154,19 +154,16 @@ pub enum Errno {
 #[derive(Debug, Clone, Copy)]
 pub struct Error {
     errno: Errno,
-    msg: Option<&'static str>,
+    msg: &'static str,
 }
 
 impl Error {
     pub const fn new(errno: Errno) -> Self {
-        Error { errno, msg: None }
+        Error { errno, msg: "" }
     }
 
     pub const fn with_message(errno: Errno, msg: &'static str) -> Self {
-        Error {
-            errno,
-            msg: Some(msg),
-        }
+        Error { errno, msg }
     }
 
     pub const fn error(&self) -> Errno {

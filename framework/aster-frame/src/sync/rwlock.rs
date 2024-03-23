@@ -10,10 +10,7 @@ use core::{
     },
 };
 
-use crate::{
-    task::DisablePreemptGuard,
-    trap::{disable_local, DisabledLocalIrqGuard},
-};
+use crate::trap::{disable_local, DisabledLocalIrqGuard};
 
 /// Spin-based Read-write Lock
 ///
@@ -322,12 +319,11 @@ impl<T> RwLock<T> {
     /// method over the `try_read_irq_disabled` method as it has a higher
     /// efficiency.
     pub fn try_read(&self) -> Option<RwLockReadGuard<T>> {
-        let guard = DisablePreemptGuard::for_lock();
         let lock = self.lock.fetch_add(READER, Acquire);
         if lock & (WRITER | MAX_READER | BEING_UPGRADED) == 0 {
             Some(RwLockReadGuard {
                 inner: self,
-                inner_guard: InnerGuard::PreemptGuard(guard),
+                inner_guard: InnerGuard::None,
             })
         } else {
             self.lock.fetch_sub(READER, Release);
@@ -346,7 +342,6 @@ impl<T> RwLock<T> {
     /// method over the `try_write_irq_disabled` method as it has a higher
     /// efficiency.
     pub fn try_write(&self) -> Option<RwLockWriteGuard<T>> {
-        let guard = DisablePreemptGuard::for_lock();
         if self
             .lock
             .compare_exchange(0, WRITER, Acquire, Relaxed)
@@ -354,7 +349,7 @@ impl<T> RwLock<T> {
         {
             Some(RwLockWriteGuard {
                 inner: self,
-                inner_guard: InnerGuard::PreemptGuard(guard),
+                inner_guard: InnerGuard::None,
             })
         } else {
             None
@@ -372,12 +367,11 @@ impl<T> RwLock<T> {
     /// method over the `try_upread_irq_disabled` method as it has a higher
     /// efficiency.
     pub fn try_upread(&self) -> Option<RwLockUpgradeableGuard<T>> {
-        let guard = DisablePreemptGuard::for_lock();
         let lock = self.lock.fetch_or(UPGRADEABLE_READER, Acquire) & (WRITER | UPGRADEABLE_READER);
         if lock == 0 {
             return Some(RwLockUpgradeableGuard {
                 inner: self,
-                inner_guard: InnerGuard::PreemptGuard(guard),
+                inner_guard: InnerGuard::None,
             });
         } else if lock == WRITER {
             self.lock.fetch_sub(UPGRADEABLE_READER, Release);
@@ -408,7 +402,7 @@ unsafe impl<T: Sync> Sync for RwLockUpgradeableGuard<'_, T> {}
 
 enum InnerGuard {
     IrqGuard(DisabledLocalIrqGuard),
-    PreemptGuard(DisablePreemptGuard),
+    None,
 }
 
 /// A guard that provides immutable data access.
@@ -505,9 +499,7 @@ impl<'a, T> RwLockUpgradeableGuard<'a, T> {
         if res.is_ok() {
             let inner_guard = match &mut self.inner_guard {
                 InnerGuard::IrqGuard(irq_guard) => InnerGuard::IrqGuard(irq_guard.transfer_to()),
-                InnerGuard::PreemptGuard(preempt_guard) => {
-                    InnerGuard::PreemptGuard(preempt_guard.transfer_to())
-                }
+                InnerGuard::None => InnerGuard::None,
             };
             drop(self);
             Ok(RwLockWriteGuard { inner, inner_guard })

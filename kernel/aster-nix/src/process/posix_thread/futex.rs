@@ -34,7 +34,7 @@ pub fn futex_wait_bitset(
     let mut futex_bucket = futex_bucket_ref.lock();
 
     if futex_key.load_val() != futex_val {
-        return_errno_with_message!(Errno::EINVAL, "futex value does not match");
+        return_errno!(Errno::EAGAIN)
     }
     let futex_item = FutexItem::new(futex_key, bitset);
     futex_bucket.enqueue_item(futex_item.clone());
@@ -305,10 +305,17 @@ impl FutexKey {
         FutexKey(futex_addr as _)
     }
 
+    #[allow(unsafe_code)]
     pub fn load_val(&self) -> i32 {
         // FIXME: how to implement a atomic load?
-        warn!("implement an atomic load");
-        read_val_from_user(self.0).unwrap()
+        // warn!("implement an atomic load");
+        let ptr = self.0 as *const core::sync::atomic::AtomicI32;
+        atomic::fence(atomic::Ordering::SeqCst);
+        let _: i32 = read_val_from_user(self.0).unwrap();
+        let ret = unsafe { (*ptr).load(atomic::Ordering::SeqCst) };
+        // let ret = read_val_from_user(self.0).unwrap();
+        atomic::fence(atomic::Ordering::SeqCst);
+        ret
     }
 
     pub fn addr(&self) -> Vaddr {

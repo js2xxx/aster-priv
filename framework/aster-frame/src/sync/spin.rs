@@ -69,21 +69,20 @@ impl<T: ?Sized> SpinLock<T> {
     /// in the interrupt context, then it is ok to use this method
     /// in the process context.
     pub fn lock(&self) -> SpinLockGuard<T> {
-        let guard = DisablePreemptGuard::for_lock();
         self.acquire_lock();
         SpinLockGuard {
             lock: self,
-            inner_guard: InnerGuard::PreemptGuard(guard),
+            inner_guard: InnerGuard::None,
         }
     }
 
     /// Try acquiring the spin lock immedidately without disabling the local IRQs.
     pub fn try_lock(&self) -> Option<SpinLockGuard<T>> {
-        let guard = DisablePreemptGuard::for_lock();
+        let guard = DisablePreemptGuard::new();
         if self.try_acquire_lock() {
             let lock_guard = SpinLockGuard {
                 lock: self,
-                inner_guard: InnerGuard::PreemptGuard(guard),
+                inner_guard: InnerGuard::None,
             };
             return Some(lock_guard);
         }
@@ -120,7 +119,7 @@ unsafe impl<T: ?Sized + Send> Sync for SpinLock<T> {}
 
 enum InnerGuard {
     IrqGuard(DisabledLocalIrqGuard),
-    PreemptGuard(DisablePreemptGuard),
+    None,
 }
 
 /// The guard of a spin lock that disables the local IRQs.

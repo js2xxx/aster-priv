@@ -18,7 +18,6 @@ use self::{
     interval::{Interval, IntervalSet},
     vm_mapping::VmMapping,
 };
-use super::page_fault_handler::PageFaultHandler;
 use crate::{prelude::*, vm::perms::VmPerms};
 
 /// Virtual Memory Address Regions (VMARs) are a type of capability that manages
@@ -53,32 +52,13 @@ pub struct Vmar<R = Rights>(Arc<Vmar_>, R);
 pub trait VmarRightsOp {
     /// Returns the access rights.
     fn rights(&self) -> Rights;
-    fn check_rights(&self, rights: Rights) -> Result<()>;
-}
 
-impl<R> VmarRightsOp for Vmar<R> {
-    default fn rights(&self) -> Rights {
-        unimplemented!()
-    }
-
-    default fn check_rights(&self, rights: Rights) -> Result<()> {
+    fn check_rights(&self, rights: Rights) -> Result<()> {
         if self.rights().contains(rights) {
             Ok(())
         } else {
             return_errno_with_message!(Errno::EACCES, "Rights check failed");
         }
-    }
-}
-
-// TODO: how page faults can be delivered to and handled by the current VMAR.
-impl<R> PageFaultHandler for Vmar<R> {
-    default fn handle_page_fault(
-        &self,
-        page_fault_addr: Vaddr,
-        not_present: bool,
-        write: bool,
-    ) -> Result<()> {
-        unimplemented!()
     }
 }
 
@@ -729,7 +709,10 @@ impl Vmar_ {
     }
 }
 
-impl<R> Vmar<R> {
+impl<R> Vmar<R>
+where
+    Self: VmarRightsOp,
+{
     /// The base address, i.e., the offset relative to the root VMAR.
     ///
     /// The base address of a root VMAR is zero.
