@@ -2,7 +2,7 @@
 
 use aster_frame::{
     cpu::UserContext,
-    task::{schedule, Current, Task, TaskOptions},
+    task::{current_task, schedule, Task, TaskOptions},
     user::{UserContextApi, UserEvent, UserMode, UserSpace},
 };
 
@@ -15,7 +15,7 @@ use crate::{
 /// create new task with userspace and parent process
 pub fn create_new_user_task(user_space: Arc<UserSpace>, thread_ref: Weak<Thread>) -> Arc<Task> {
     fn user_task_entry() {
-        let cur = Task::current();
+        let cur = current_task().expect("failed to get current task");
         let user_space = cur.user_space().expect("user task should have user space");
         let mut user_mode = UserMode::new(user_space);
         debug!(
@@ -58,7 +58,7 @@ pub fn create_new_user_task(user_space: Arc<UserSpace>, thread_ref: Weak<Thread>
         }
         debug!("exit user loop");
         // FIXME: This is a work around: exit in kernel task entry may be not called. Why this will happen?
-        Task::current().exit();
+        cur.exit();
     }
 
     TaskOptions::new(user_task_entry)

@@ -2,7 +2,12 @@
 
 use core::fmt::Arguments;
 
+use crate::sync::SpinLock;
+
+pub static CONSOLE_LOCK: SpinLock<()> = SpinLock::new(());
+
 pub fn print(args: Arguments) {
+    let _guard = CONSOLE_LOCK.lock_irq_disabled();
     crate::arch::console::print(args);
 }
 

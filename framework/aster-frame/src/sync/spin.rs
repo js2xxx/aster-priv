@@ -7,10 +7,7 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use crate::{
-    task::DisablePreemptGuard,
-    trap::{disable_local, DisabledLocalIrqGuard},
-};
+use crate::trap::{disable_local, DisabledLocalIrqGuard};
 
 /// A spin lock.
 pub struct SpinLock<T: ?Sized> {
@@ -25,6 +22,10 @@ impl<T> SpinLock<T> {
             val: UnsafeCell::new(val),
             lock: AtomicBool::new(false),
         }
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        self.val.get_mut()
     }
 
     pub fn as_ptr(&self) -> *mut T {
@@ -78,7 +79,6 @@ impl<T: ?Sized> SpinLock<T> {
 
     /// Try acquiring the spin lock immedidately without disabling the local IRQs.
     pub fn try_lock(&self) -> Option<SpinLockGuard<T>> {
-        let guard = DisablePreemptGuard::new();
         if self.try_acquire_lock() {
             let lock_guard = SpinLockGuard {
                 lock: self,
@@ -91,8 +91,18 @@ impl<T: ?Sized> SpinLock<T> {
 
     /// Access the spin lock, otherwise busy waiting
     fn acquire_lock(&self) {
-        while !self.try_acquire_lock() {
-            core::hint::spin_loop();
+        let mut spin_shift = 0;
+        while self
+            .lock
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            for _ in 0..(1 << spin_shift) {
+                core::hint::spin_loop();
+            }
+            if spin_shift < 16 {
+                spin_shift += 1;
+            }
         }
     }
 

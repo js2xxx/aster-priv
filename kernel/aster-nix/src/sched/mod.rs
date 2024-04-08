@@ -8,8 +8,8 @@ mod scheduler;
 use alloc::boxed::Box;
 
 use aster_frame::task::set_scheduler;
-use scheduler::fifo_with_rt_preempt::PreemptiveFIFOScheduler as Sched;
-// use scheduler::completely_fair_scheduler::CompletelyFairScheduler as Sched;
+// use scheduler::fifo_with_rt_preempt::PreemptiveFIFOScheduler as Sched;
+use scheduler::completely_fair_scheduler::CompletelyFairScheduler as Sched;
 
 pub fn init() {
     let sched = Box::new(Sched::new());

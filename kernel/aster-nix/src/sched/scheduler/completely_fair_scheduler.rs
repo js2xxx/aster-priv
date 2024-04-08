@@ -11,7 +11,10 @@ use core::{
 use aster_frame::{
     arch::read_tsc,
     cpu::{num_cpus, this_cpu},
-    task::{with_current, NeedResched, ReadPriority, Scheduler, Task, TaskAdapter},
+    task::{
+        with_current, NeedResched, ReadPriority, SchedTask, Scheduler, Task, TaskAdapter,
+        TaskStatus,
+    },
     trap::{disable_local, is_local_enabled},
 };
 use intrusive_collections::{intrusive_adapter, KeyAdapter, LinkedList, RBTree, RBTreeAtomicLink};
@@ -89,7 +92,7 @@ impl PartialEq for VRuntime {
     }
 }
 
-intrusive_adapter!(VrAdapter = Arc<Task>: Task { rb_tree_link: RBTreeAtomicLink });
+intrusive_adapter!(VrAdapter = Arc<Task>: Task { link: RBTreeAtomicLink });
 impl<'a> KeyAdapter<'a> for VrAdapter {
     type Key = VRuntime;
 
@@ -122,7 +125,7 @@ impl RunQueue {
             cpu,
             real_time_tasks: SpinLock::new(LinkedList::new(Default::default())),
 
-            min_vruntime: AtomicU64::new(0),
+            min_vruntime: AtomicU64::new(u64::MAX / 2),
             normal_tasks: SpinLock::new(RBTree::new(VrAdapter::new())),
 
             load: AtomicU64::new(0),
@@ -130,13 +133,18 @@ impl RunQueue {
     }
 
     #[track_caller]
-    fn push(&self, task: Arc<Task>, _force_yield: bool) {
-        assert!(!task.rb_tree_link.is_linked());
+    fn push(&self, task: Arc<Task>) {
         if task.is_real_time() {
             self.real_time_tasks
                 .lock_irq_disabled()
                 .push_back(task.clone());
         } else {
+            assert_eq!(task.status(), TaskStatus::Runnable, "{task:p}");
+            task.transition(|status| {
+                assert_eq!(*status, TaskStatus::Runnable, "{task:p}");
+                *status = TaskStatus::Ready(self.cpu);
+            });
+
             task.set_need_resched(false);
             let _irq = disable_local();
 
@@ -155,13 +163,13 @@ impl RunQueue {
 
             let mut map = self.normal_tasks.lock();
             map.insert(task);
-            let min_vruntime = vr(map.front().get().unwrap());
+            let min_vruntime = vr(map.front().get().unwrap()).get();
             self.min_vruntime.store(min_vruntime, Relaxed);
         }
     }
 
-    fn pick_next_task(&self, target_cpu: u32) -> Option<Arc<Task>> {
-        debug_assert!(!is_local_enabled());
+    fn pop(&self, target_cpu: u32) -> Option<Arc<Task>> {
+        assert!(!is_local_enabled());
 
         let mut real_time_tasks = self.real_time_tasks.lock();
         if !real_time_tasks.is_empty() {
@@ -172,19 +180,23 @@ impl RunQueue {
         let mut set = self.normal_tasks.lock();
         let mut front = set.front_mut();
         let (task, min) = loop {
-            let task = front.remove()?;
-            if !task.status().is_runnable() {
-                self.load.fetch_sub(vr(&task).weight, Relaxed);
-                drop(task);
+            let task = front.get()?;
+
+            if !task.status().is_ready(self.cpu) {
+                self.load.fetch_sub(vr(task).weight, Relaxed);
+                println!("dropping {task:p}: {:?}", task.status());
+                drop(front.remove());
                 continue;
             }
             if !task.cpu_affinity.contains(target_cpu) {
-                front.insert(task);
+                front.move_next();
                 continue;
             }
+
+            let task = front.remove().unwrap();
             let min = match front.get() {
                 Some(task) => vr(task).get(),
-                None => 0,
+                None => u64::MAX / 2,
             };
             self.load.fetch_sub(vr(&task).weight, Relaxed);
             break (task, min);
@@ -193,13 +205,19 @@ impl RunQueue {
         if let Some(vr) = unsafe { (*task.sched_entity.as_ptr()).get_mut::<VRuntime>() } {
             vr.start = read_tsc();
         }
+        task.transition(|status| {
+            assert_eq!(*status, TaskStatus::Ready(self.cpu));
+            *status = TaskStatus::Runnable;
+        });
+
         self.min_vruntime.store(min, Relaxed);
+        assert!(!task.is_linked());
         Some(task)
     }
 
-    fn should_preempt_cur_task(&self) -> bool {
+    fn should_preempt(&self) -> bool {
         with_current(|cur| {
-            debug_assert!(!is_local_enabled());
+            assert!(!is_local_enabled());
             let se = cur.sched_entity.lock();
             match se.get::<VRuntime>() {
                 Some(vr) => vr.get() > self.min_vruntime.load(Relaxed),
@@ -209,9 +227,9 @@ impl RunQueue {
         .unwrap_or(true)
     }
 
-    fn tick_cur_task(&self) {
+    fn tick(&self) {
         with_current(|cur| {
-            debug_assert!(!is_local_enabled());
+            assert!(!is_local_enabled());
             let mut se = cur.sched_entity.lock();
             if let Some(v) = se.get_mut::<VRuntime>() {
                 v.tick();
@@ -219,27 +237,8 @@ impl RunQueue {
                 if v.vruntime > self.min_vruntime.load(Relaxed) {
                     cur.set_need_resched(true);
                 }
-                // let cur = v.vruntime;
-                // drop(se);
-
-                // let cur_tick = aster_frame::arch::current_tick();
-                // if cur_tick > PACE.load(Relaxed) + 10000 {
-                //     PACE.store(cur_tick, Relaxed);
-
-                //     println!(
-                //         "cur_tick = {cur_tick}, cur_task = {cur}, min = {}",
-                //         self.min_vruntime.load(Relaxed)
-                //     );
-                //     print!("num_ready = ");
-                //     for r in &*self.normal_tasks.lock() {
-                //         print!("{}, ", vr(r));
-                //     }
-                //     println!();
-                // }
             }
         });
-
-        // static PACE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     }
 }
 
@@ -265,14 +264,14 @@ impl CompletelyFairScheduler {
     }
 
     #[track_caller]
-    fn push(&self, task: Arc<Task>, force_yield: bool) {
+    fn push(&self, task: Arc<Task>) {
         if task.cpu_affinity.contains(this_cpu()) {
             self.cur_rq()
         } else {
             let cpu = task.cpu_affinity.iter().next().expect("empty affinity");
             &self.rq[cpu]
         }
-        .push(task, force_yield)
+        .push(task)
     }
 }
 
@@ -283,33 +282,45 @@ impl Default for CompletelyFairScheduler {
 }
 
 impl Scheduler for CompletelyFairScheduler {
-    fn enqueue(&self, task: Arc<Task>) {
-        self.push(task, false)
+    fn enqueue(&self, task: SchedTask) {
+        self.push(unsafe { task.into_raw() })
     }
 
-    fn pick_next_task(&self) -> Option<Arc<Task>> {
-        self.cur_rq().pick_next_task(this_cpu())
+    fn pick_next_task(&self) -> Option<SchedTask> {
+        (self.cur_rq().pop(this_cpu())).map(|task| unsafe { SchedTask::from_raw(task) })
     }
 
-    fn clear(&self, task: &Arc<Task>) {
+    fn clear(&self, task: &Task) {
         task.sched_entity.lock_irq_disabled().remove::<VRuntime>();
     }
 
     fn should_preempt_cur_task(&self) -> bool {
-        self.cur_rq().should_preempt_cur_task()
+        self.cur_rq().should_preempt()
     }
 
     fn tick_cur_task(&self) {
-        self.cur_rq().tick_cur_task()
+        self.cur_rq().tick();
+
+        PACE.with(|pace| {
+            let cur_tick = aster_frame::arch::current_tick();
+            if cur_tick >= pace.get() + 5000 {
+                pace.set(cur_tick);
+                // self.traverse();
+            }
+        });
+
+        aster_frame::cpu_local! {
+            static PACE: core::cell::Cell<u64> = core::cell::Cell::new(0);
+        }
     }
 
     fn prepare_to_yield_cur_task(&self) {
         self.tick_cur_task()
     }
 
-    fn prepare_to_yield_to(&self, task: Arc<Task>) {
-        self.prepare_to_yield_cur_task();
-        self.push(task, true)
+    fn prepare_to_yield_to(&self, task: &SchedTask) {
+        let mut se = task.sched_entity.lock_irq_disabled();
+        se.entry().or_insert_with(|| VRuntime::new(task));
     }
 
     fn load_balance(&self) {
@@ -317,18 +328,36 @@ impl Scheduler for CompletelyFairScheduler {
             .reduce(|a, b| max_by_key(a, b, |t| t.load.load(Relaxed)))
             .filter(|rq| rq.load.load(Relaxed) > 0)
         {
-            let this_cpu = this_cpu();
-            if src.cpu != this_cpu {
-                while src.load.load(Relaxed) > self.cur_rq().load.load(Relaxed) + WEIGHT_0 {
-                    let _guard = disable_local();
-
-                    let Some(task) = src.pick_next_task(this_cpu) else {
+            let target = self.cur_rq();
+            if src.cpu != target.cpu {
+                while src.load.load(Relaxed) > target.load.load(Relaxed) + WEIGHT_0 {
+                    let Some(task) = src.pop(target.cpu) else {
                         break;
                     };
-                    // println!("requeueing {task:p} from {} to {this_cpu}", src.cpu);
-                    self.cur_rq().push(task, false);
+                    assert!(task.status().is_runnable());
+                    atomic::fence(SeqCst);
+                    // println!("requeueing {task:p} from {} to {}", src.cpu, target.cpu);
+                    target.push(task);
                 }
             }
         }
+    }
+
+    fn traverse(&self) {
+        with_current(|cur| {
+            let cur_tick = aster_frame::arch::current_tick();
+            println!(
+                "CPU#{} cur_tick = {cur_tick}, cur_task = {:p}({}), min = {}",
+                this_cpu(),
+                cur.as_ptr(),
+                vr(cur).get(),
+                self.cur_rq().min_vruntime.load(Relaxed)
+            );
+            print!("num_ready = ");
+            for r in &*self.cur_rq().normal_tasks.lock() {
+                print!("{:p}({}), ", r, vr(r).get());
+            }
+            println!("\n");
+        });
     }
 }

@@ -7,7 +7,7 @@
 
 use core::fmt::{Arguments, Write};
 
-use aster_frame::sync::SpinLock;
+use aster_frame::console::CONSOLE_LOCK;
 
 struct VirtioConsolesPrinter;
 
@@ -20,10 +20,9 @@ impl Write for VirtioConsolesPrinter {
     }
 }
 
-static PRINTER: SpinLock<VirtioConsolesPrinter> = SpinLock::new(VirtioConsolesPrinter);
-
 pub fn _print(args: Arguments) {
-    PRINTER.lock_irq_disabled().write_fmt(args).unwrap();
+    let _lock = CONSOLE_LOCK.lock_irq_disabled();
+    VirtioConsolesPrinter.write_fmt(args).unwrap();
 }
 
 /// Copy from Rust std: https://github.com/rust-lang/rust/blob/master/library/std/src/macros.rs

@@ -5,13 +5,8 @@
 use alloc::{boxed::Box, string::ToString};
 use core::ffi::c_void;
 
-use log::error;
-
-use crate::{early_print, early_println};
-
-extern crate cfg_if;
-extern crate gimli;
 use gimli::Register;
+use log::error;
 use unwinding::{
     abi::{
         UnwindContext, UnwindReasonCode, _Unwind_Backtrace, _Unwind_FindEnclosingFunction,
@@ -20,12 +15,15 @@ use unwinding::{
     panic::begin_panic,
 };
 
+use crate::{early_print, early_println};
+
 /// The panic handler must be defined in the binary crate or in the crate that the binary
 /// crate explicity declares by `extern crate`. We cannot let the base crate depend on the
 /// framework due to prismatic dependencies. That's why we export this symbol and state the
 /// panic handler in the binary crate.
 #[export_name = "__aster_panic_handler"]
 pub fn panic_handler(info: &core::panic::PanicInfo) -> ! {
+    crate::arch::irq::disable_local();
     let throw_info = ktest::PanicInfo {
         message: info.message().unwrap().to_string(),
         file: info.location().unwrap().file().to_string(),

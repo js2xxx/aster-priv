@@ -5,7 +5,7 @@
 
 use align_ext::AlignExt;
 use aster_frame::{
-    task::{Current, Task},
+    task:: with_current,
     vm::{VmIo, VmPerm},
 };
 use aster_rights::{Full, Rights};
@@ -70,7 +70,8 @@ pub fn load_elf_to_vm(
             // the macro will panic. This corner case should be handled later.
             // FIXME: how to set the correct exit status?
             do_exit_group(TermStatus::Exited(1));
-            Task::current().exit();
+            with_current(|cur| cur.exit());
+            unreachable!()
         }
     }
 }

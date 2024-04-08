@@ -48,7 +48,7 @@ impl BindPortConfig {
 pub fn spawn_background_poll_thread(iface: Arc<dyn Iface>) {
     // FIXME: use timer or wait_timeout when timer is enable.
     let task_fn = move || {
-        debug!("spawn background poll thread");
+        println!("[kernel] spawn background poll thread for {}", iface.name());
         loop {
             let next_poll_time = if let Some(next_poll_time) = iface.next_poll_at_ms() {
                 next_poll_time

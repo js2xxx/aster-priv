@@ -4,12 +4,7 @@
 
 use trapframe::TrapFrame;
 
-use crate::{
-    cpu::UserContext,
-    prelude::*,
-    task::{Current, Task},
-    vm::VmSpace,
-};
+use crate::{cpu::UserContext, prelude::*, vm::VmSpace};
 
 /// A user space.
 ///
@@ -116,7 +111,6 @@ pub trait UserContextApi {
 /// }
 /// ```
 pub struct UserMode<'a> {
-    current: Arc<Task>,
     user_space: &'a Arc<UserSpace>,
     context: UserContext,
 }
@@ -127,7 +121,6 @@ impl<'a> !Send for UserMode<'a> {}
 impl<'a> UserMode<'a> {
     pub fn new(user_space: &'a Arc<UserSpace>) -> Self {
         Self {
-            current: Task::current(),
             user_space,
             context: user_space.init_ctx,
         }
@@ -146,7 +139,6 @@ impl<'a> UserMode<'a> {
         unsafe {
             self.user_space.vm_space().activate();
         }
-        debug_assert!(Arc::ptr_eq(&self.current, &Task::current()));
         self.context.execute()
     }
 

@@ -1,25 +1,39 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::{cell::Cell, marker::PhantomData};
+use core::{
+    cell::Cell,
+    marker::PhantomData,
+    sync::atomic::{self, Ordering::*},
+};
 
-use crate::arch::irq::{disable_local as disable_local_irq, enable_local as enable_local_irq};
+use crate::{
+    arch::irq,
+    cpu::this_cpu,
+    trap::{disable_local, DisabledLocalIrqGuard},
+};
 
 #[thread_local]
 static PREEMPT_INFO: PreemptInfo = PreemptInfo::new();
+
+type Location = (u32, &'static core::panic::Location<'static>);
+#[track_caller]
+fn caller() -> Location {
+    (this_cpu(), core::panic::Location::caller())
+}
 
 // TODO: unify the fields to avoid the inconsistency.
 #[derive(Debug)]
 struct PreemptInfo {
     /// The number of locks and irq-disabled contexts held by the current CPU.
     num: Cell<usize>,
-    in_preemption: Cell<bool>,
+    in_preemption: Cell<Option<Location>>,
 }
 
 impl PreemptInfo {
     const fn new() -> Self {
         Self {
             num: Cell::new(0),
-            in_preemption: Cell::new(false),
+            in_preemption: Cell::new(None),
         }
     }
 
@@ -27,34 +41,12 @@ impl PreemptInfo {
         self.num.get()
     }
 
-    fn inc_num(&self) -> usize {
-        let get = self.num.get();
-        self.num.set(get + 1);
-        get
-    }
-
-    fn dec_num(&self) {
-        self.num.set(self.num.get() - 1);
-    }
-
     fn in_preemption(&self) -> bool {
-        self.in_preemption.get()
-    }
-
-    fn activate(&self) {
-        self.in_preemption.set(false);
-        enable_local_irq();
-    }
-
-    fn deactivate(&self) {
-        if self.in_preemption.get() {
-            panic!("Nested preemption is not allowed on in_preemption flag.");
-        }
-        disable_local_irq();
-        self.in_preemption.set(true);
+        self.in_preemption.get().is_some()
     }
 
     fn is_preemptible(&self) -> bool {
+        let _local = disable_local();
         // TODO: may cause inconsistency
         !self.in_preemption() && !self.in_atomic()
     }
@@ -66,17 +58,22 @@ impl PreemptInfo {
     }
 }
 
-/// A private type to prevent user from constructing DisablePreemptGuard directly.
-struct _Guard(PhantomData<*mut ()>);
-
 /// A guard to disable preempt.
 #[clippy::has_significant_drop]
-pub struct DisablePreemptGuard(PhantomData<*mut ()>);
+pub struct DisablePreemptGuard {
+    local: DisabledLocalIrqGuard,
+    marker: PhantomData<*mut ()>,
+}
 
 impl DisablePreemptGuard {
     pub fn new() -> Self {
-        PREEMPT_INFO.inc_num();
-        Self(PhantomData)
+        let local = disable_local();
+        PREEMPT_INFO.num.set(PREEMPT_INFO.num.get() + 1);
+        atomic::compiler_fence(Acquire);
+        Self {
+            local,
+            marker: PhantomData,
+        }
     }
 
     /// Transfer this guard to a new guard.
@@ -94,7 +91,8 @@ impl Default for DisablePreemptGuard {
 
 impl Drop for DisablePreemptGuard {
     fn drop(&mut self) {
-        PREEMPT_INFO.dec_num()
+        atomic::compiler_fence(Release);
+        PREEMPT_INFO.num.set(PREEMPT_INFO.num.get() - 1);
     }
 }
 
@@ -115,15 +113,20 @@ pub fn is_in_preemption() -> bool {
     PREEMPT_INFO.in_preemption()
 }
 
-/// Allow preemption on the current CPU.
-/// However, preemptible or not actually depends on the counter in `PREEMPT_INFO`.
-pub fn activate_preemption() {
-    PREEMPT_INFO.activate();
+#[track_caller]
+pub fn deactivate_preemption() {
+    panic_if_not_preemptible(true);
+    irq::disable_local();
+    PREEMPT_INFO.in_preemption.set(Some(caller()));
+    atomic::compiler_fence(Acquire);
 }
 
-/// Disalbe all preemption on the current CPU.
-pub fn deactivate_preemption() {
-    PREEMPT_INFO.deactivate();
+pub fn activate_preemption() {
+    assert!(!irq::is_local_enabled());
+    atomic::compiler_fence(Release);
+    PREEMPT_INFO.in_preemption.set(None);
+    irq::enable_local();
+    panic_if_not_preemptible(false);
 }
 
 // TODO: impl might_sleep
@@ -133,20 +136,23 @@ pub fn panic_if_in_atomic() {
         return;
     }
     panic!(
-        "The CPU is in atomic: PREEMPT_INFO was {} with the in_preemption flag as {}.",
+        "CPU#{} is in atomic: atomic count = {}; suppressed location = {:?}.",
+        this_cpu(),
         PREEMPT_INFO.num(),
-        PREEMPT_INFO.in_preemption()
+        PREEMPT_INFO.in_preemption.get(),
     );
 }
 
 #[track_caller]
-pub fn panic_if_not_preemptible() {
+fn panic_if_not_preemptible(start: bool) {
     if is_preemptible() {
         return;
     }
     panic!(
-        "The CPU is not preemptible: PREEMPT_INFO was {} with the in_preemption flag as {}.",
+        "CPU#{} is in not preemptible: atomic count = {}; suppressed location = {:?} ({}).",
+        this_cpu(),
         PREEMPT_INFO.num(),
-        PREEMPT_INFO.in_preemption()
+        PREEMPT_INFO.in_preemption.get(),
+        if start { "start" } else { "end" }
     );
 }

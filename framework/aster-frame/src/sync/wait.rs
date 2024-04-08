@@ -2,7 +2,8 @@
 
 use alloc::{collections::VecDeque, sync::Arc};
 use core::{
-    sync::atomic::{AtomicBool, Ordering}, time::Duration
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
 };
 
 use bitflags::bitflags;
@@ -10,7 +11,7 @@ use bitflags::bitflags;
 use super::SpinLock;
 use crate::{
     arch::timer::{add_timeout_list, TIMER_FREQ},
-    task::{add_task, current_task, yield_now, Task, TaskStatus, WakeUp},
+    task::{add_task, current_task, with_current, yield_now, Task, WakeUp},
     trap::disable_local,
 };
 
@@ -191,11 +192,8 @@ impl Waiter {
 
     /// make self into wait status until be called wake up
     pub fn wait(&self) {
-        debug_assert!(core::ptr::eq(
-            self.task.as_ref(),
-            current_task().unwrap().as_ref()
-        ));
-        self.task.inner_exclusive_access().task_status = TaskStatus::Sleeping;
+        with_current(|cur| assert_eq!(cur.as_ptr(), Arc::as_ptr(&self.task)));
+        self.task.sleep();
         while !self.is_woken_up.load(Ordering::SeqCst) {
             yield_now();
         }
@@ -208,8 +206,9 @@ impl Waiter {
                 .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
         {
             let guard = disable_local();
-            self.task.wakeup();
-            add_task(self.task.clone());
+            if self.task.wakeup() {
+                add_task(self.task.clone());
+            }
         }
     }
 

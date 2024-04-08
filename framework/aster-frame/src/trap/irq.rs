@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use core::{cell::Cell, fmt::Debug, marker::PhantomData};
+use core::{fmt::Debug, marker::PhantomData};
 
 use trapframe::TrapFrame;
 
@@ -119,9 +119,6 @@ pub fn is_local_enabled() -> bool {
     irq::is_local_enabled()
 }
 
-#[thread_local]
-static IRQ_DISABLED_COUNT: Cell<u32> = Cell::new(0);
-
 /// A guard for disabled local IRQs.
 pub struct DisabledLocalIrqGuard {
     was_enabled: bool,
@@ -130,15 +127,8 @@ pub struct DisabledLocalIrqGuard {
 
 impl DisabledLocalIrqGuard {
     fn new() -> Self {
-        let count = IRQ_DISABLED_COUNT.get();
-        IRQ_DISABLED_COUNT.set(count + 1);
-        let was_enabled = if count == 0 {
-            let ret = irq::is_local_enabled();
-            irq::disable_local();
-            ret
-        } else {
-            false
-        };
+        let was_enabled = irq::is_local_enabled();
+        irq::disable_local();
         Self {
             was_enabled,
             marker: PhantomData,
@@ -154,9 +144,7 @@ impl DisabledLocalIrqGuard {
 
 impl Drop for DisabledLocalIrqGuard {
     fn drop(&mut self) {
-        let count = IRQ_DISABLED_COUNT.get() - 1;
-        IRQ_DISABLED_COUNT.set(count);
-        if count == 0 && self.was_enabled {
+        if self.was_enabled {
             irq::enable_local();
         }
     }

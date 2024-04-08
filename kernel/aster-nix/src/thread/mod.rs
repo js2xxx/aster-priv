@@ -4,7 +4,7 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use aster_frame::task::{yield_now, Current, Task};
+use aster_frame::task::{current_task, yield_now, Task};
 
 use self::status::ThreadStatus;
 use crate::prelude::*;
@@ -51,7 +51,7 @@ impl Thread {
     }
 
     pub fn current() -> Arc<Self> {
-        let task = Task::current();
+        let task = current_task().expect("failed to get current task");
         let thread = task
             .data()
             .downcast_ref::<Weak<Thread>>()

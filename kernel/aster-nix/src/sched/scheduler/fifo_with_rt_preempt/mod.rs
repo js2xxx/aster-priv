@@ -60,10 +60,4 @@ impl Scheduler for PreemptiveFIFOScheduler {
     }
 
     fn tick_cur_task(&self) {}
-
-    fn prepare_to_yield_to(&self, task: Arc<Task>) {
-        self.prepare_to_yield_cur_task();
-        task.set_need_resched(false);
-        self.find_queue(&task).push_front(task);
-    }
 }

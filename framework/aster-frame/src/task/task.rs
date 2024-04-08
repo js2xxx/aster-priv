@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use intrusive_collections::{intrusive_adapter, LinkedListAtomicLink, RBTreeAtomicLink};
+use core::{
+    ops::Deref,
+    sync::atomic::{AtomicBool, Ordering::*},
+};
+
+use intrusive_collections::{intrusive_adapter, RBTreeAtomicLink};
 
 use super::{
     add_task, clear_task,
@@ -14,7 +19,7 @@ use crate::{
     config::{KERNEL_STACK_SIZE, PAGE_SIZE},
     cpu::CpuSet,
     prelude::*,
-    sync::{Mutex, MutexGuard, SpinLock},
+    sync::{SpinLock, SpinLockGuard},
     timer::current_tick,
     user::UserSpace,
     vm::{page_table::KERNEL_PAGE_TABLE, VmAllocOptions, VmSegment},
@@ -131,16 +136,16 @@ pub struct Task {
     func: Box<dyn Fn() + Send + Sync>,
     data: Box<dyn Any + Send + Sync>,
     user_space: Option<Arc<UserSpace>>,
-    task_inner: Mutex<TaskInner>,
+    task_inner: SpinLock<TaskInner>,
     exit_code: usize,
     /// kernel stack, note that the top is SyscallFrame/TrapFrame
     kstack: KernelStack,
-    link: LinkedListAtomicLink,
+    need_resched: AtomicBool,
     priority: Priority,
     // TODO:: add multiprocessor support
     pub cpu_affinity: CpuSet,
     pub sched_entity: SpinLock<SchedEntityMap>,
-    pub rb_tree_link: RBTreeAtomicLink,
+    pub link: RBTreeAtomicLink,
 }
 
 impl PartialEq for Task {
@@ -150,23 +155,26 @@ impl PartialEq for Task {
 }
 
 // TaskAdapter struct is implemented for building relationships between doubly linked list and Task struct
-intrusive_adapter!(pub TaskAdapter = Arc<Task>: Task { link: LinkedListAtomicLink });
+intrusive_adapter!(pub TaskAdapter = Arc<Task>: Task { link: RBTreeAtomicLink });
 
 pub(crate) struct TaskInner {
-    pub task_status: TaskStatus,
+    task_status: TaskStatus,
     pub ctx: TaskContext,
-    pub need_resched: bool,
     pub woken_up_timestamp: Option<u64>, // in Tick
 }
 
 impl Task {
     /// Guarded access to the task inner.
-    pub(crate) fn inner_exclusive_access(&self) -> MutexGuard<'_, TaskInner> {
-        self.task_inner.lock()
+    pub(crate) fn inner_exclusive_access(&self) -> SpinLockGuard<'_, TaskInner> {
+        self.task_inner.lock_irq_disabled()
     }
 
     pub(crate) fn context(&self) -> TaskContext {
-        self.task_inner.lock().ctx
+        self.task_inner.lock_irq_disabled().ctx
+    }
+
+    pub fn is_linked(&self) -> bool {
+        self.link.is_linked()
     }
 
     pub fn run(self: &Arc<Self>) {
@@ -183,7 +191,12 @@ impl Task {
 
     /// Returns the task status.
     pub fn status(&self) -> TaskStatus {
-        self.task_inner.lock().task_status
+        self.task_inner.lock_irq_disabled().task_status
+    }
+
+    #[track_caller]
+    pub fn transition<T>(&self, f: impl FnOnce(&mut TaskStatus) -> T) -> T {
+        f(&mut self.inner_exclusive_access().task_status)
     }
 
     /// Returns the task data.
@@ -200,7 +213,7 @@ impl Task {
         }
     }
 
-    pub fn exit(self: &Arc<Self>) -> ! {
+    pub fn exit(&self) -> ! {
         self.inner_exclusive_access().task_status = TaskStatus::Exited;
         clear_task(self);
         schedule();
@@ -209,6 +222,56 @@ impl Task {
             super::yield_now();
             core::hint::spin_loop();
         }
+    }
+}
+
+#[repr(transparent)]
+pub struct SchedTask(Arc<Task>);
+
+impl SchedTask {
+    #[track_caller]
+    pub fn new(task: Arc<Task>) -> SchedTask {
+        // println!("+{task:p}:#{}", crate::cpu::this_cpu(),);
+        SchedTask(task)
+    }
+
+    /// # Safety
+    ///
+    /// Must not be cloned implicitly.
+    pub unsafe fn from_raw(task: Arc<Task>) -> SchedTask {
+        SchedTask(task)
+    }
+
+    /// # Safety
+    ///
+    /// Must not be cloned implicitly.
+    pub unsafe fn into_raw(self) -> Arc<Task> {
+        let copy = core::ptr::read(&self.0);
+        core::mem::forget(self);
+        copy
+    }
+
+    pub fn as_ptr(&self) -> *const Task {
+        Arc::as_ptr(&self.0)
+    }
+
+    pub(crate) fn clone_inner(&self) -> Arc<Task> {
+        // println!("~{:p}", self.0);
+        self.0.clone()
+    }
+}
+
+impl Deref for SchedTask {
+    type Target = Task;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for SchedTask {
+    fn drop(&mut self) {
+        // println!("-{:p}:#{}", self.0, crate::cpu::this_cpu());
     }
 }
 
@@ -228,18 +291,37 @@ impl ReadPriority for Task {
 }
 
 pub trait WakeUp {
-    fn wakeup(&self);
+    fn sleep(&self);
+
+    fn wakeup(&self) -> bool;
 
     fn woken_up_timestamp(&self) -> Option<u64>;
 
     fn clear_woken_up_timestamp(&self);
 }
 impl WakeUp for Task {
-    fn wakeup(&self) {
-        let inner = &mut self.task_inner.lock();
-        if inner.task_status.is_sleeping() {
-            inner.task_status = TaskStatus::Runnable;
-            inner.woken_up_timestamp = Some(current_tick());
+    fn sleep(&self) {
+        let mut inner = self.task_inner.lock_irq_disabled();
+        inner.task_status = match inner.task_status {
+            TaskStatus::Running(cpu) => TaskStatus::ReadyToSleep(cpu),
+            s => panic!("{:?}, expected Running({})", s, crate::cpu::this_cpu()),
+        };
+    }
+
+    fn wakeup(&self) -> bool {
+        let mut inner = self.task_inner.lock_irq_disabled();
+        match inner.task_status {
+            TaskStatus::Sleeping => {
+                inner.task_status = TaskStatus::Runnable;
+                inner.woken_up_timestamp = Some(current_tick());
+                true
+            }
+            TaskStatus::ReadyToSleep(cpu) => {
+                inner.task_status = TaskStatus::Running(cpu);
+                inner.woken_up_timestamp = Some(current_tick());
+                false
+            }
+            _ => false,
         }
     }
 
@@ -259,33 +341,24 @@ pub trait NeedResched {
 }
 impl NeedResched for Task {
     fn set_need_resched(&self, need_resched: bool) {
-        self.inner_exclusive_access().need_resched = need_resched;
+        self.need_resched.store(need_resched, Release);
     }
 
     fn need_resched(&self) -> bool {
-        self.inner_exclusive_access().need_resched
+        self.need_resched.load(Acquire)
     }
 }
-
-pub trait Current {
-    fn current() -> Arc<Self>;
-}
-impl Current for Task {
-    fn current() -> Arc<Self> {
-        current_task().unwrap()
-    }
-}
-
-pub trait SchedTaskBase: ReadPriority + NeedResched + Current {}
-impl SchedTaskBase for Task {}
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 /// The status of a task.
 pub enum TaskStatus {
     /// The task is runnable.
     Runnable,
+    Ready(u32),
+    Running(u32),
     /// The task is sleeping.
     Sleeping,
+    ReadyToSleep(u32),
     /// The task has exited.
     Exited,
 }
@@ -293,6 +366,10 @@ pub enum TaskStatus {
 impl TaskStatus {
     pub fn is_runnable(&self) -> bool {
         self == &TaskStatus::Runnable
+    }
+
+    pub fn is_ready(&self, cpu: u32) -> bool {
+        *self == TaskStatus::Ready(cpu)
     }
 
     pub fn is_sleeping(&self) -> bool {
@@ -364,27 +441,26 @@ impl TaskOptions {
 
     /// Builds a new task but not run it immediately.
     pub fn build(self) -> Result<Arc<Task>> {
-        let result = Task {
+        let mut result = Task {
             func: self.func.unwrap(),
             data: self.data.unwrap(),
             user_space: self.user_space,
-            task_inner: Mutex::new(TaskInner {
+            task_inner: SpinLock::new(TaskInner {
                 task_status: TaskStatus::Runnable,
                 ctx: TaskContext::default(),
-                need_resched: false,
                 woken_up_timestamp: None,
             }),
             exit_code: 0,
             kstack: KernelStack::new_with_guard_page()?,
-            link: LinkedListAtomicLink::new(),
+            need_resched: false.into(),
             priority: self.priority,
             cpu_affinity: self.cpu_affinity,
             sched_entity: SpinLock::new(SchedEntityMap::new()),
-            rb_tree_link: RBTreeAtomicLink::new(),
+            link: RBTreeAtomicLink::new(),
         };
 
-        result.task_inner.lock().ctx.rip = kernel_task_entry as usize;
-        result.task_inner.lock().ctx.regs.rsp =
+        result.task_inner.get_mut().ctx.rip = kernel_task_entry as usize;
+        result.task_inner.get_mut().ctx.regs.rsp =
             (crate::vm::paddr_to_vaddr(result.kstack.end_paddr())) as u64;
 
         Ok(Arc::new(result))
@@ -396,27 +472,26 @@ impl TaskOptions {
     /// If having a user space, then the task can switch to the user space to
     /// execute user code. Multiple tasks can share a single user space.
     pub fn spawn(self) -> Result<Arc<Task>> {
-        let result = Task {
+        let mut result = Task {
             func: self.func.unwrap(),
             data: self.data.unwrap(),
             user_space: self.user_space,
-            task_inner: Mutex::new(TaskInner {
+            task_inner: SpinLock::new(TaskInner {
                 task_status: TaskStatus::Runnable,
                 ctx: TaskContext::default(),
-                need_resched: false,
                 woken_up_timestamp: None,
             }),
             exit_code: 0,
             kstack: KernelStack::new_with_guard_page()?,
-            link: LinkedListAtomicLink::new(),
+            need_resched: false.into(),
             priority: self.priority,
             cpu_affinity: self.cpu_affinity,
             sched_entity: SpinLock::new(SchedEntityMap::new()),
-            rb_tree_link: RBTreeAtomicLink::new(),
+            link: RBTreeAtomicLink::new(),
         };
 
-        result.task_inner.lock().ctx.rip = kernel_task_entry as usize;
-        result.task_inner.lock().ctx.regs.rsp =
+        result.task_inner.get_mut().ctx.rip = kernel_task_entry as usize;
+        result.task_inner.get_mut().ctx.regs.rsp =
             (crate::vm::paddr_to_vaddr(result.kstack.end_paddr())) as u64;
 
         let arc_self = Arc::new(result);
@@ -428,6 +503,7 @@ impl TaskOptions {
 /// All tasks will enter this function.
 /// This function is meant to execute the `func` in [`Task`].
 fn kernel_task_entry() {
+    assert!(!crate::arch::irq::is_local_enabled());
     activate_preemption();
     let current_task =
         current_task().expect("no current task, it should have current task in kernel task entry");

@@ -32,6 +32,7 @@ SECTIONS
     . += KERNEL_VMA;
 
     .text                   : AT(ADDR(.text) - KERNEL_VMA) {
+        PROVIDE(__executable_start = .);
         *(.text .text.*)
         PROVIDE(__etext = .);
     }

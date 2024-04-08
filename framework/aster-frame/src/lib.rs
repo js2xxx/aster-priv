@@ -12,6 +12,7 @@
 #![feature(let_chains)]
 #![feature(negative_impls)]
 #![feature(new_uninit)]
+#![feature(offset_of)]
 #![feature(panic_info_message)]
 #![feature(ptr_sub_ptr)]
 #![feature(strict_provenance)]

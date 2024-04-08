@@ -71,11 +71,6 @@ pub fn sys_futex(
         }
         _ => panic!("Unsupported futex operations"),
     };
-    let res = match res {
-        Ok(res) => res,
-        Err(err) => -(err.error() as i32) as isize,
-    };
 
-    debug!("futex returns, tid= {} ", current_thread!().tid());
-    Ok(SyscallReturn::Return(res as _))
+    res.map(SyscallReturn::Return)
 }

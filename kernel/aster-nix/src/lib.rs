@@ -14,6 +14,7 @@
 #![feature(int_roundings)]
 #![feature(let_chains)]
 #![feature(linked_list_remove)]
+#![feature(offset_of)]
 #![feature(register_tool)]
 #![feature(step_trait)]
 #![feature(trait_alias)]
@@ -78,7 +79,7 @@ fn init_thread() {
         "[kernel] Spawn init thread, tid = {}",
         current_thread!().tid()
     );
-    net::lazy_init();
+    // net::lazy_init();
     fs::lazy_init();
     // driver::pci::virtio::block::block_device_test();
     let thread = Thread::spawn_kernel_thread(ThreadOptions::new(|| {
