@@ -5,7 +5,7 @@ use aster_frame::{cpu::num_cpus, sync::Waiter};
 use crate::{prelude::*, util::read_val_from_user};
 
 type FutexBitSet = u32;
-type FutexBucketRef = Arc<Mutex<FutexBucket>>;
+type FutexBucketRef = Arc<SpinLock<FutexBucket>>;
 
 const FUTEX_OP_MASK: u32 = 0x0000_000F;
 const FUTEX_FLAGS_MASK: u32 = 0xFFFF_FFF0;
@@ -31,7 +31,7 @@ pub fn futex_wait_bitset(
     let (_, futex_bucket_ref) = FUTEX_BUCKETS.get_bucket(futex_key);
 
     // lock futex bucket ref here to avoid data race
-    let mut futex_bucket = futex_bucket_ref.lock();
+    let mut futex_bucket = futex_bucket_ref.lock_irq_disabled();
 
     if futex_key.load_val() != futex_val {
         return_errno!(Errno::EAGAIN)
@@ -39,10 +39,8 @@ pub fn futex_wait_bitset(
     let futex_item = FutexItem::new(futex_key, bitset);
     futex_bucket.enqueue_item(futex_item.clone());
 
-    // drop lock
-    drop(futex_bucket);
     // Wait on the futex item
-    futex_item.wait();
+    futex_item.wait(futex_bucket);
 
     Ok(())
 }
@@ -65,7 +63,7 @@ pub fn futex_wake_bitset(
 
     let futex_key = FutexKey::new(futex_addr);
     let (_, futex_bucket_ref) = FUTEX_BUCKETS.get_bucket(futex_key);
-    let mut futex_bucket = futex_bucket_ref.lock();
+    let mut futex_bucket = futex_bucket_ref.lock_irq_disabled();
     let res = futex_bucket.dequeue_and_wake_items(futex_key, max_count, bitset);
     // debug!("futex wake bitset succeeds, res = {}", res);
     drop(futex_bucket);
@@ -93,13 +91,14 @@ pub fn futex_requeue(
 
     let nwakes = {
         if bucket_idx == new_bucket_idx {
-            let mut futex_bucket = futex_bucket_ref.lock();
+            let mut futex_bucket = futex_bucket_ref.lock_irq_disabled();
             let nwakes =
                 futex_bucket.dequeue_and_wake_items(futex_key, max_nwakes, FUTEX_BITSET_MATCH_ANY);
             futex_bucket.update_item_keys(futex_key, futex_new_key, max_nrequeues);
             drop(futex_bucket);
             nwakes
         } else {
+            let _local = aster_frame::trap::disable_local();
             let (mut futex_bucket, mut futex_new_bucket) = {
                 if bucket_idx < new_bucket_idx {
                     let futex_bucket = futex_bucket_ref.lock();
@@ -153,7 +152,7 @@ impl FutexBucketVec {
             vec: Vec::with_capacity(size),
         };
         for _ in 0..size {
-            let bucket = Arc::new(Mutex::new(FutexBucket::new()));
+            let bucket = Arc::new(SpinLock::new(FutexBucket::new()));
             buckets.vec.push(bucket);
         }
         buckets
@@ -189,16 +188,6 @@ impl FutexBucket {
         self.queue.push_back(item);
     }
 
-    pub fn dequeue_item(&mut self, item: &FutexItem) {
-        let item_i = self
-            .queue
-            .iter()
-            .position(|futex_item| *futex_item == *item);
-        if let Some(item_i) = item_i {
-            self.queue.remove(item_i).unwrap();
-        }
-    }
-
     pub fn dequeue_and_wake_items(
         &mut self,
         key: FutexKey,
@@ -206,13 +195,12 @@ impl FutexBucket {
         bitset: FutexBitSet,
     ) -> usize {
         let mut count = 0;
-        let mut items_to_wake = Vec::new();
 
         self.queue.retain(|item| {
             if count >= max_count || key != item.key || (bitset & item.bitset) == 0 {
                 true
             } else {
-                items_to_wake.push(item.clone());
+                item.wake();
                 count += 1;
                 false
             }
@@ -220,7 +208,6 @@ impl FutexBucket {
 
         // debug!("items to wake len: {}", items_to_wake.len());
 
-        FutexItem::batch_wake(&items_to_wake);
         count
     }
 
@@ -251,7 +238,7 @@ impl FutexBucket {
                 true
             } else {
                 let mut new_item = item.clone();
-                new_item.key = new_key;
+                new_item.rekey(new_key);
                 another.enqueue_item(new_item);
                 count += 1;
                 false
@@ -260,11 +247,20 @@ impl FutexBucket {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(PartialEq, Clone)]
 struct FutexItem {
     key: FutexKey,
     bitset: FutexBitSet,
     waiter: FutexWaiterRef,
+}
+
+impl core::fmt::Debug for FutexItem {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("Futex")
+            .field(&self.key)
+            .field(&self.waiter)
+            .finish()
+    }
 }
 
 impl FutexItem {
@@ -277,22 +273,19 @@ impl FutexItem {
     }
 
     pub fn wake(&self) {
-        // debug!("wake futex item, key = {:?}", self.key);
+        debug!("wake {self:?}");
         self.waiter.wake_up();
     }
 
-    pub fn wait(&self) {
-        // debug!("wait on futex item, key = {:?}", self.key);
-        self.waiter.wait();
+    pub fn wait<T>(&self, guard: T) {
+        debug!("wait {self:?}");
+        self.waiter.wait(guard);
         // debug!("wait finished, key = {:?}", self.key);
     }
 
-    pub fn waiter(&self) -> &FutexWaiterRef {
-        &self.waiter
-    }
-
-    pub fn batch_wake(items: &[FutexItem]) {
-        items.iter().for_each(|item| item.waiter().wake_up());
+    pub fn rekey(&mut self, new_key: FutexKey) {
+        debug!("requeue {self:?} to {new_key:?}");
+        self.key = new_key;
     }
 }
 

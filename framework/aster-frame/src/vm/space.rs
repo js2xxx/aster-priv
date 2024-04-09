@@ -5,7 +5,7 @@ use core::ops::Range;
 use bitflags::bitflags;
 
 use super::{is_page_aligned, MapArea, MemorySet, VmFrameVec, VmIo};
-use crate::{arch::mm::PageTableFlags, config::PAGE_SIZE, prelude::*, sync::Mutex, Error};
+use crate::{arch::mm::PageTableFlags, prelude::*, sync::Mutex, vm::PAGE_SIZE, Error};
 
 /// Virtual memory space.
 ///
@@ -31,6 +31,7 @@ impl VmSpace {
             memory_set: Arc::new(Mutex::new(MemorySet::new())),
         }
     }
+
     /// Activate the page table, load root physical address to cr3
     #[allow(clippy::missing_safety_doc)]
     pub unsafe fn activate(&self) {
@@ -64,19 +65,40 @@ impl VmSpace {
         let mut memory_set = self.memory_set.lock();
         // FIXME: This is only a hack here. The interface of MapArea cannot simply deal with unmap part of memory,
         // so we only map MapArea of page size now.
+
+        // Ensure that the base address is not unwrapped repeatedly
+        // and the addresses used later will not overflow
+        let base_addr = options.addr.unwrap();
+        base_addr
+            .checked_add(frames.len() * PAGE_SIZE)
+            .ok_or(Error::Overflow)?;
         for (idx, frame) in frames.into_iter().enumerate() {
-            let addr = options.addr.unwrap() + idx * PAGE_SIZE;
+            let addr = base_addr + idx * PAGE_SIZE;
             let frames = VmFrameVec::from_one_frame(frame);
             memory_set.map(MapArea::new(addr, PAGE_SIZE, flags, frames));
         }
 
-        Ok(options.addr.unwrap())
+        Ok(base_addr)
     }
 
-    /// determine whether a vaddr is already mapped
+    /// Determine whether a `vaddr` is already mapped.
     pub fn is_mapped(&self, vaddr: Vaddr) -> bool {
         let memory_set = self.memory_set.lock();
         memory_set.is_mapped(vaddr)
+    }
+
+    /// Determine whether the target `vaddr` is writable based on the page table.
+    pub fn is_writable(&self, vaddr: Vaddr) -> bool {
+        let memory_set = self.memory_set.lock();
+        let flags = memory_set.flags(vaddr);
+        flags.is_some_and(|flags| flags.contains(PageTableFlags::WRITABLE))
+    }
+
+    /// Determine whether the target `vaddr` is executable based on the page table.
+    pub fn is_executable(&self, vaddr: Vaddr) -> bool {
+        let memory_set = self.memory_set.lock();
+        let flags = memory_set.flags(vaddr);
+        flags.is_some_and(|flags| !flags.contains(PageTableFlags::NO_EXECUTE))
     }
 
     /// Unmaps the physical memory pages within the VM address range.
@@ -86,9 +108,12 @@ impl VmSpace {
     pub fn unmap(&self, range: &Range<Vaddr>) -> Result<()> {
         assert!(is_page_aligned(range.start) && is_page_aligned(range.end));
         let mut start_va = range.start;
-        let page_size = (range.end - range.start) / PAGE_SIZE;
+        let num_pages = (range.end - range.start) / PAGE_SIZE;
         let mut inner = self.memory_set.lock();
-        for i in 0..page_size {
+        start_va
+            .checked_add(PAGE_SIZE * num_pages)
+            .ok_or(Error::Overflow)?;
+        for i in 0..num_pages {
             inner.unmap(start_va)?;
             start_va += PAGE_SIZE;
         }
@@ -117,6 +142,16 @@ impl VmSpace {
             self.memory_set.lock().protect(addr, flags)
         }
         Ok(())
+    }
+
+    /// Deep-copy the current `VmSpace`.
+    ///
+    /// The generated new `VmSpace` possesses a `MemorySet` independent from the
+    /// original `VmSpace`, with initial contents identical to the original.
+    pub fn deep_copy(&self) -> Self {
+        Self {
+            memory_set: Arc::new(Mutex::new(self.memory_set.lock().clone())),
+        }
     }
 }
 

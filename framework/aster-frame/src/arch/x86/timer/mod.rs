@@ -166,14 +166,14 @@ impl Ord for TimerCallback {
 ///
 /// user should ensure that the callback function cannot take too much time
 ///
-pub fn add_timeout_list<F, T>(timeout: u64, data: T, callback: F) -> Arc<TimerCallback>
+pub fn add_timeout_list<F, T>(timeout: u64, data: Arc<T>, callback: F) -> Arc<TimerCallback>
 where
     F: Fn(&TimerCallback) + Send + Sync + 'static,
     T: Any + Send + Sync,
 {
     let timer_callback = TimerCallback::new(
         TICK.load(Ordering::Acquire) + timeout,
-        Arc::new(data),
+        data,
         Box::new(callback),
     );
     let arc = Arc::new(timer_callback);

@@ -154,16 +154,19 @@ pub enum Errno {
 #[derive(Debug, Clone, Copy)]
 pub struct Error {
     errno: Errno,
-    msg: &'static str,
+    msg: Option<&'static str>,
 }
 
 impl Error {
     pub const fn new(errno: Errno) -> Self {
-        Error { errno, msg: "" }
+        Error { errno, msg: None }
     }
 
     pub const fn with_message(errno: Errno, msg: &'static str) -> Self {
-        Error { errno, msg }
+        Error {
+            errno,
+            msg: Some(msg),
+        }
     }
 
     pub const fn error(&self) -> Errno {
@@ -186,6 +189,7 @@ impl From<aster_frame::Error> for Error {
             aster_frame::Error::IoError => Error::new(Errno::EIO),
             aster_frame::Error::NotEnoughResources => Error::new(Errno::EBUSY),
             aster_frame::Error::PageFault => Error::new(Errno::EFAULT),
+            aster_frame::Error::Overflow => Error::new(Errno::EOVERFLOW),
         }
     }
 }

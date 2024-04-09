@@ -43,6 +43,7 @@ pub mod prelude;
 pub mod smp;
 pub mod sync;
 pub mod task;
+pub mod collections;
 pub mod timer;
 pub mod trap;
 pub mod user;

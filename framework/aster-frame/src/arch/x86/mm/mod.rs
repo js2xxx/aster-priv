@@ -14,6 +14,8 @@ use crate::{
     },
 };
 
+pub(crate) const NR_ENTRIES_PER_PAGE: usize = 512;
+
 bitflags::bitflags! {
     #[derive(Pod)]
     #[repr(C)]

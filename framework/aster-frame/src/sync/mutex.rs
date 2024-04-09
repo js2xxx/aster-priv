@@ -26,6 +26,14 @@ impl<T> Mutex<T> {
         }
     }
 
+    pub const fn as_ptr(&self) -> *mut T {
+        self.val.get()
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        self.val.get_mut()
+    }
+
     /// Acquire the mutex.
     ///
     /// This method runs in a block way until the mutex can be acquired.

@@ -185,7 +185,6 @@ impl Task {
             yield_to(self.clone());
         } else {
             add_task(self.clone());
-            schedule();
         }
     }
 

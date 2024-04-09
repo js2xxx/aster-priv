@@ -31,9 +31,9 @@ struct TimerInner {
 }
 
 fn timer_callback(callback: &TimerCallback) {
-    match callback.data().downcast_ref::<Arc<Timer>>() {
-        Some(timer) => (timer.function)(timer.clone()),
-        None => panic!("the timer callback is not Timer structure"),
+    match callback.data().clone().downcast::<Timer>() {
+        Ok(timer) => (timer.function)(timer.clone()),
+        Err(_) => panic!("the timer callback is not Timer structure"),
     }
 }
 

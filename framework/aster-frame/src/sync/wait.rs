@@ -90,10 +90,7 @@ impl WaitQueue {
             };
 
             add_timeout_list(remaining_ticks, waiter.clone(), |timer_call_back| {
-                let waiter = timer_call_back
-                    .data()
-                    .downcast_ref::<Arc<Waiter>>()
-                    .unwrap();
+                let waiter = timer_call_back.data().downcast_ref::<Waiter>().unwrap();
                 waiter.wake_up();
             })
         });
@@ -116,7 +113,7 @@ impl WaitQueue {
                 return cond();
             }
 
-            waiter.wait();
+            waiter.wait(());
         }
     }
 
@@ -191,9 +188,10 @@ impl Waiter {
     }
 
     /// make self into wait status until be called wake up
-    pub fn wait(&self) {
+    pub fn wait<T>(&self, guard: T) {
         with_current(|cur| assert_eq!(cur.as_ptr(), Arc::as_ptr(&self.task)));
         self.task.sleep();
+        drop(guard);
         while !self.is_woken_up.load(Ordering::SeqCst) {
             yield_now();
         }

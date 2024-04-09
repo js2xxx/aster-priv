@@ -1,42 +1,43 @@
 [package]
+edition = "2021"
 name = "aster-frame"
 version = "0.1.0"
-edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-align_ext = { path = "../libs/align_ext" }
-aster-main = { path = "../libs/aster-main" }
+acpi = "4.1.1"
+align_ext = {path = "../libs/align_ext"}
+aml = "0.16.3"
+anymap3 = {version = "1.0.0", default-features = false, features = ["hashbrown"]}
+aster-main = {path = "../libs/aster-main"}
 bit_field = "0.10.1"
 bitflags = "1.3"
-bitvec = { version = "1.0", default-features = false, features = ["alloc"] }
-linux-boot-params = { path = "../libs/linux-bzimage/boot-params" }
+bitvec = {version = "1.0", default-features = false, features = ["alloc"]}
 buddy_system_allocator = "0.9.0"
 cfg-if = "1.0"
-gimli = { version = "0.28", default-features = false, features = ["read-core"] }
-inherit-methods-macro = { git = "https://github.com/asterinas/inherit-methods-macro", rev = "98f7e3e" }
-int-to-c-enum = { path = "../../kernel/libs/int-to-c-enum" }
+gimli = {version = "0.28", default-features = false, features = ["read-core"]}
+inherit-methods-macro = {git = "https://github.com/asterinas/inherit-methods-macro", rev = "98f7e3e"}
+int-to-c-enum = {path = "../../kernel/libs/int-to-c-enum"}
 intrusive-collections = "0.9.5"
-ktest = { path = "../libs/ktest" }
-lazy_static = { version = "1.0", features = ["spin_no_std"] }
+ktest = {path = "../libs/ktest"}
+lazy_static = {version = "1.0", features = ["spin_no_std"]}
+linux-boot-params = {path = "../libs/linux-bzimage/boot-params"}
 log = "0.4"
-pod = { git = "https://github.com/asterinas/pod", rev = "d7dba56" }
+multiboot2 = "0.16.0"
+pod = {git = "https://github.com/asterinas/pod", rev = "d7dba56"}
+rsdp = "2.0.0"
 spin = "0.9.4"
 static_assertions = "1.1.0"
-tdx-guest = { path = "../libs/tdx-guest", optional = true }
-trapframe = { git = "https://github.com/js2xxx/aster-tf" }
-volatile = { version = "0.4.5", features = ["unstable"] }
-x86_64 = "0.14.2"
+tdx-guest = {path = "../libs/tdx-guest", optional = true}
+trapframe = {git = "https://github.com/js2xxx/aster-tf"}
+volatile = {version = "0.4.5", features = ["unstable"]}
 x86 = "0.52.0"
-acpi = "4.1.1"
-aml = "0.16.3"
-multiboot2 = "0.16.0"
-rsdp = "2.0.0"
-anymap3 = {version = "1.0.0", default-features = false, features = ["hashbrown"]}
+x86_64 = "0.14.2"
+xarray = {git = "https://github.com/asterinas/xarray", rev = "72a4067"}
 
 [target.x86_64-unknown-none.dependencies]
-unwinding = { version = "0.2.1", default-features = false, features = ["fde-static", "hide-trace", "panic", "personality", "unwinder"] }
+unwinding = {version = "0.2.1", default-features = false, features = ["fde-static", "hide-trace", "panic", "personality", "unwinder"]}
 
 [features]
 intel_tdx = ["dep:tdx-guest"]

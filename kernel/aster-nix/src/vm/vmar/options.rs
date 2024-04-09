@@ -2,9 +2,9 @@
 
 //! Options for allocating child VMARs.
 
-use aster_frame::{config::PAGE_SIZE, Error, Result};
+use aster_frame::{vm::PAGE_SIZE, Error, Result};
 
-use super::{Vmar, VmarRightsOp};
+use super::Vmar;
 
 /// Options for allocating a child VMAR, which must not overlap with any
 /// existing mappings or child VMARs.
@@ -95,10 +95,7 @@ impl<R> VmarChildOptions<R> {
     /// # Access rights
     ///
     /// The child VMAR is initially assigned all the parent's access rights.
-    pub fn alloc(self) -> Result<Vmar<R>>
-    where
-        Vmar<R>: VmarRightsOp,
-    {
+    pub fn alloc(self) -> Result<Vmar<R>> {
         // check align
         let align = if let Some(align) = self.align {
             debug_assert!(align % PAGE_SIZE == 0);
@@ -145,14 +142,14 @@ mod test {
     use crate::vm::{
         page_fault_handler::PageFaultHandler,
         perms::VmPerms,
-        vmar::ROOT_VMAR_HIGHEST_ADDR,
+        vmar::ROOT_VMAR_CAP_ADDR,
         vmo::{VmoOptions, VmoRightsOp},
     };
 
     #[ktest]
     fn root_vmar() {
         let vmar = Vmar::<Full>::new_root();
-        assert!(vmar.size() == ROOT_VMAR_HIGHEST_ADDR);
+        assert!(vmar.size() == ROOT_VMAR_CAP_ADDR);
     }
 
     #[ktest]

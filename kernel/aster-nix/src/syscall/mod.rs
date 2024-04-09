@@ -403,7 +403,12 @@ pub fn handle_syscall(context: &mut UserContext) {
             }
         }
         Err(err) => {
-            debug!("syscall return error: {:?}", err);
+            if err.error() != Errno::EAGAIN {
+                error!(
+                    "syscall return error for number {}: {:?}",
+                    syscall_frame.syscall_number, err
+                );
+            }
             let errno = err.error() as i32;
             context.set_rax((-errno) as usize)
         }

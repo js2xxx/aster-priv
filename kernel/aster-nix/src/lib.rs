@@ -129,7 +129,9 @@ pub fn run_first_process() -> ! {
             .cpu_affinity(CpuSet::single(this_cpu()))
             .priority(Priority::lowest()),
     );
-    unreachable!()
+    loop {
+        aster_frame::task::schedule();
+    }
 }
 
 #[no_mangle]
@@ -152,7 +154,9 @@ fn __aster_ap_entry() -> ! {
             .cpu_affinity(CpuSet::single(this_cpu()))
             .priority(Priority::lowest()),
     );
-    unreachable!()
+    loop {
+        aster_frame::task::schedule();
+    }
 }
 
 fn print_banner() {
