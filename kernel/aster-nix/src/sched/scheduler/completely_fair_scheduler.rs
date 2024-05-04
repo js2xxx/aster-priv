@@ -5,11 +5,11 @@
 use alloc::sync::Arc;
 use core::{
     cmp::{max_by_key, Ordering},
+    mem,
     sync::atomic::{AtomicU64, Ordering::*},
 };
 
 use aster_frame::{
-    arch::read_tsc,
     cpu::{num_cpus, this_cpu},
     task::{
         with_current, NeedResched, ReadPriority, SchedTask, Scheduler, Task, TaskAdapter,
@@ -18,6 +18,7 @@ use aster_frame::{
     trap::{disable_local, is_local_enabled},
 };
 use intrusive_collections::{intrusive_adapter, KeyAdapter, LinkedList, RBTree, RBTreeAtomicLink};
+use spin::Once;
 
 use crate::{prelude::*, sched::nice::Nice};
 
@@ -31,23 +32,67 @@ pub const fn nice_to_weight(nice: Nice) -> u64 {
 }
 const WEIGHT_0: u64 = nice_to_weight(Nice::new(0));
 
+fn tsc_factors() -> (u64, u64) {
+    static FACTORS: Once<(u64, u64)> = Once::new();
+    *FACTORS.call_once(|| {
+        let freq = aster_frame::arch::tsc_freq();
+        assert_ne!(freq, 0);
+        let mut a = 1_000_000_000;
+        let mut b = freq;
+        if a < b {
+            mem::swap(&mut a, &mut b);
+        }
+        while a > 1 && b > 1 {
+            let t = a;
+            a = b;
+            b = t % b;
+        }
+
+        let gcd = if a <= 1 { b } else { a };
+        (1_000_000_000 / gcd, freq / gcd)
+    })
+}
+
+fn tsc_clock_ns() -> u64 {
+    aster_frame::arch::read_tsc()
+}
+
+fn period(num: u64) -> u64 {
+    const BASE_SLICE_NS: u64 = 750_000;
+    const MIN_PERIOD_NS: u64 = 6_000_000;
+
+    static CONSTS: Once<(u64, u64)> = Once::new();
+    let (base_slice_clks, min_period_clks) = *CONSTS.call_once(|| {
+        let (a, b) = tsc_factors();
+        (BASE_SLICE_NS * b / a, MIN_PERIOD_NS * b / a)
+    });
+    let min_gran_clks = base_slice_clks * u64::from((1 + num_cpus()).ilog2());
+    (min_gran_clks * num).max(min_period_clks)
+}
+
 /// The virtual runtime
 #[derive(Clone, Copy)]
 pub struct VRuntime {
     key: usize,
+    weight: u64,
+
     vruntime: u64,
     start: u64,
-    weight: u64,
+
+    period_start: u64,
 }
 
 impl VRuntime {
     pub fn new(task: &Task) -> VRuntime {
         let nice = Nice::new(task.priority().as_nice().unwrap());
+        let now = tsc_clock_ns();
         VRuntime {
             key: task as *const Task as usize,
-            vruntime: 0,
-            start: read_tsc(),
             weight: nice_to_weight(nice),
+
+            vruntime: 0,
+            start: now,
+            period_start: now,
         }
     }
 
@@ -55,18 +100,25 @@ impl VRuntime {
         self.vruntime + ((cur - self.start) * WEIGHT_0 / self.weight)
     }
 
-    pub fn get(&self) -> u64 {
+    fn get(&self) -> u64 {
         self.vruntime
     }
 
-    pub fn update(&mut self) {
-        let cur = read_tsc();
+    fn tick(&mut self, load: u64, period: u64) -> bool {
+        let cur = tsc_clock_ns();
         self.vruntime = self.get_with_cur(cur);
         self.start = cur;
-    }
 
-    pub fn tick(&mut self) {
-        self.update();
+        if load == 0 {
+            return true;
+        }
+        let slice = period * self.weight / load;
+        if cur > self.period_start + slice {
+            self.period_start = cur;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -112,11 +164,11 @@ pub struct RunQueue {
     /// Tasks with a priority of less than 100 are regarded as real-time tasks.
     real_time_tasks: SpinLock<LinkedList<TaskAdapter>>,
 
-    min_vruntime: AtomicU64,
     /// Tasks with a priority greater than or equal to 100 are regarded as normal tasks.
     normal_tasks: SpinLock<RBTree<VrAdapter>>,
 
     load: AtomicU64,
+    num: AtomicU64,
 }
 
 impl RunQueue {
@@ -125,11 +177,15 @@ impl RunQueue {
             cpu,
             real_time_tasks: SpinLock::new(LinkedList::new(Default::default())),
 
-            min_vruntime: AtomicU64::new(u64::MAX / 2),
             normal_tasks: SpinLock::new(RBTree::new(VrAdapter::new())),
 
             load: AtomicU64::new(0),
+            num: AtomicU64::new(0),
         }
+    }
+
+    fn period(&self) -> u64 {
+        self::period(self.num.load(Relaxed))
     }
 
     #[track_caller]
@@ -150,21 +206,14 @@ impl RunQueue {
 
             {
                 let mut se = task.sched_entity.lock();
-                let ent = se.entry();
-                let vruntime = ent.or_insert_with(|| VRuntime::new(&task));
+                let vruntime = se.entry().or_insert_with(|| VRuntime::new(&task));
 
                 self.load.fetch_add(vruntime.weight, Relaxed);
-                // if !force_yield {
-                //     let min_boundary = (self.min_vruntime.load(Relaxed) - BANDWIDTH).max(0);
-                //     let delta = (min_boundary - vruntime.vruntime).max(1);
-                //     vruntime.vruntime += delta.ilog2() as u64
-                // }
+                self.num.fetch_add(1, Relaxed);
             }
 
             let mut map = self.normal_tasks.lock();
             map.insert(task);
-            let min_vruntime = vr(map.front().get().unwrap()).get();
-            self.min_vruntime.store(min_vruntime, Relaxed);
         }
     }
 
@@ -179,11 +228,12 @@ impl RunQueue {
 
         let mut set = self.normal_tasks.lock();
         let mut front = set.front_mut();
-        let (task, min) = loop {
+        let task = loop {
             let task = front.get()?;
 
             if !task.status().is_ready(self.cpu) {
                 self.load.fetch_sub(vr(task).weight, Relaxed);
+                self.num.fetch_sub(1, Relaxed);
                 println!("dropping {task:p}: {:?}", task.status());
                 drop(front.remove());
                 continue;
@@ -194,23 +244,19 @@ impl RunQueue {
             }
 
             let task = front.remove().unwrap();
-            let min = match front.get() {
-                Some(task) => vr(task).get(),
-                None => u64::MAX / 2,
-            };
             self.load.fetch_sub(vr(&task).weight, Relaxed);
-            break (task, min);
+            self.num.fetch_sub(1, Relaxed);
+            break task;
         };
         // SAFETY: task is contained in the RB tree of our current scheduler.
         if let Some(vr) = unsafe { (*task.sched_entity.as_ptr()).get_mut::<VRuntime>() } {
-            vr.start = read_tsc();
+            vr.start = tsc_clock_ns();
         }
         task.transition(|status| {
             assert_eq!(*status, TaskStatus::Ready(self.cpu));
             *status = TaskStatus::Runnable;
         });
 
-        self.min_vruntime.store(min, Relaxed);
         assert!(!task.is_linked());
         Some(task)
     }
@@ -218,10 +264,11 @@ impl RunQueue {
     fn should_preempt(&self) -> bool {
         with_current(|cur| {
             assert!(!is_local_enabled());
-            let se = cur.sched_entity.lock();
-            match se.get::<VRuntime>() {
-                Some(vr) => vr.get() > self.min_vruntime.load(Relaxed),
-                None => true,
+            let mut se = cur.sched_entity.lock();
+            if let Some(v) = se.get_mut::<VRuntime>() {
+                v.tick(self.load.load(Relaxed), self.period())
+            } else {
+                true
             }
         })
         .unwrap_or(true)
@@ -232,9 +279,7 @@ impl RunQueue {
             assert!(!is_local_enabled());
             let mut se = cur.sched_entity.lock();
             if let Some(v) = se.get_mut::<VRuntime>() {
-                v.tick();
-
-                if v.vruntime > self.min_vruntime.load(Relaxed) {
+                if v.tick(self.load.load(Relaxed), self.period()) {
                     cur.set_need_resched(true);
                 }
             }
@@ -347,11 +392,11 @@ impl Scheduler for CompletelyFairScheduler {
         with_current(|cur| {
             let cur_tick = aster_frame::arch::current_tick();
             println!(
-                "CPU#{} cur_tick = {cur_tick}, cur_task = {:p}({}), min = {}",
+                "CPU#{} cur_tick = {cur_tick}, cur_task = {:p}({}), num = {}",
                 this_cpu(),
                 cur.as_ptr(),
                 vr(cur).get(),
-                self.cur_rq().min_vruntime.load(Relaxed)
+                self.cur_rq().num.load(Relaxed)
             );
             print!("num_ready = ");
             for r in &*self.cur_rq().normal_tasks.lock() {
