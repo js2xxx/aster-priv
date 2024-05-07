@@ -367,6 +367,10 @@ impl TaskStatus {
         self == &TaskStatus::Runnable
     }
 
+    pub fn is_running(&self) -> bool {
+        matches!(self, TaskStatus::Running(_))
+    }
+
     pub fn is_ready(&self, cpu: u32) -> bool {
         *self == TaskStatus::Ready(cpu)
     }

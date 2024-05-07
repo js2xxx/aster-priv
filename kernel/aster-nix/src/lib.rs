@@ -28,7 +28,6 @@ use aster_frame::{
     cpu::{this_cpu, CpuSet},
     task::Priority,
 };
-use process::Process;
 
 use crate::{
     prelude::*,
@@ -75,6 +74,21 @@ pub fn init() {
 }
 
 fn init_thread() {
+    let thread_main = || {
+        println!(
+            "[kernel] Spawn idle thread for CPU#{}, tid = {}",
+            this_cpu(),
+            current_thread!().tid()
+        );
+        idle_while(|| true);
+        unreachable!()
+    };
+    Thread::spawn_kernel_thread(
+        ThreadOptions::new(thread_main)
+            .cpu_affinity(CpuSet::single(this_cpu()))
+            .priority(Priority::lowest()),
+    );
+
     println!(
         "[kernel] Spawn init thread, tid = {}",
         current_thread!().tid()
@@ -93,13 +107,13 @@ fn init_thread() {
         "[aster-nix/lib.rs] spawn kernel thread, tid = {}",
         thread.tid()
     );
-    thread::work_queue::init();
+    // thread::work_queue::init();
 
     print_banner();
 
     let karg = boot::kernel_cmdline();
 
-    let initproc = Process::spawn_user_process(
+    let initproc = process::Process::spawn_user_process(
         karg.get_initproc_path().unwrap(),
         karg.get_initproc_argv().to_vec(),
         karg.get_initproc_envp().to_vec(),
@@ -107,7 +121,7 @@ fn init_thread() {
     .expect("Run init process failed.");
 
     // Wait till initproc become zombie.
-    idle_while(|| !initproc.is_zombie());
+    initproc.main_thread().unwrap().join();
 
     // TODO: exit via qemu isa debug device should not be the only way.
     let exit_code = if initproc.exit_code().unwrap() == 0 {
@@ -116,6 +130,13 @@ fn init_thread() {
         QemuExitCode::Failed
     };
     exit_qemu(exit_code);
+
+    // let t = Thread::spawn_kernel_thread(
+    //     ThreadOptions::new(crate::tests::test_priorities),
+    // );
+    // t.join();
+
+    // exit_qemu(QemuExitCode::Success)
 }
 
 static START_SPAWNING: AtomicBool = AtomicBool::new(false);
@@ -125,9 +146,7 @@ static START_SPAWNING: AtomicBool = AtomicBool::new(false);
 pub fn run_first_process() -> ! {
     START_SPAWNING.store(true, atomic::Ordering::Release);
     Thread::spawn_kernel_thread(
-        ThreadOptions::new(init_thread)
-            .cpu_affinity(CpuSet::single(this_cpu()))
-            .priority(Priority::lowest()),
+        ThreadOptions::new(init_thread).cpu_affinity(CpuSet::single(this_cpu())),
     );
     loop {
         aster_frame::task::schedule();
@@ -222,10 +241,11 @@ mod tests {
     };
 
     use crate::{
-        print, println, thread::{
+        print, println,
+        thread::{
             kernel_thread::{KernelThreadExt, ThreadOptions},
             Thread,
-        }
+        },
     };
 
     struct Barrier {

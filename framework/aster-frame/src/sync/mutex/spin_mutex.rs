@@ -35,11 +35,13 @@ impl<T> Mutex<T> {
         loop {
             let local = crate::trap::disable_local();
             let mut spin_count = 0;
-            while spin_count < 2000 {
+            while spin_count < 11 {
                 if let Some(guard) = self.try_lock() {
                     return guard;
                 }
-                core::hint::spin_loop();
+                for _ in 0..(1 << spin_count) {
+                    core::hint::spin_loop();
+                }
                 spin_count += 1;
             }
             drop(local);
@@ -58,7 +60,6 @@ impl<T> Mutex<T> {
     fn unlock(&self) {
         self.release_lock();
         crate::task::schedule();
-        // self.queue.wake_one();
     }
 
     fn acquire_lock(&self) -> bool {

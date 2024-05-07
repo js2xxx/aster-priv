@@ -98,7 +98,7 @@ fn should_preempt_cur_task() -> bool {
         return false;
     }
 
-    with_current(|cur_task| !cur_task.status().is_runnable() || cur_task.need_resched())
+    with_current(|cur_task| !cur_task.status().is_running() || cur_task.need_resched())
         .unwrap_or(true)
         || GLOBAL_SCHEDULER.should_preempt_cur_task()
 }
@@ -123,6 +123,12 @@ fn switch_to(next_task: SchedTask) {
         assert!(!irq::is_local_enabled());
         if let Some(c) = &processor.current {
             assert_ne!(c.as_ptr(), next_task.as_ptr());
+            // crate::early_println!(
+            //     "CPU#{}: {:p} -> {:p}",
+            //     this_cpu(),
+            //     c.as_ptr(),
+            //     next_task.as_ptr()
+            // );
         }
         assert!(!irq::is_local_enabled());
 

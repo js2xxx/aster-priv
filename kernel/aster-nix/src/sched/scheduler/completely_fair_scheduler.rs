@@ -409,7 +409,7 @@ impl Scheduler for CompletelyFairScheduler {
             );
             println!(
                 "load = {}, num = {}, period = {}ns",
-                self.cur_rq().load.load(Relaxed),
+                self.cur_rq().load.load(Relaxed) + vr_w(cur),
                 self.cur_rq().num.load(Relaxed),
                 { self.cur_rq().period() * a / b }
             );
