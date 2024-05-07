@@ -205,3 +205,122 @@ fn idle_while(mut cond: impl FnMut() -> bool) {
         aster_frame::task::trigger_load_balancing();
     }
 }
+
+mod tests {
+    use alloc::{sync::Arc, vec::Vec};
+    use core::{
+        array,
+        sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst},
+    };
+
+    use aster_frame::{
+        arch::{current_tick, read_tsc, TIMER_FREQ},
+        cpu::{this_cpu, CpuSet},
+        sync::{Mutex, WaitQueue},
+        task::Priority,
+        trap::is_local_enabled,
+    };
+
+    use crate::{
+        print, println, thread::{
+            kernel_thread::{KernelThreadExt, ThreadOptions},
+            Thread,
+        }
+    };
+
+    struct Barrier {
+        flag: AtomicBool,
+        wq: WaitQueue,
+    }
+
+    impl Barrier {
+        fn new() -> Self {
+            Barrier {
+                flag: AtomicBool::new(false),
+                wq: WaitQueue::new(),
+            }
+        }
+
+        fn test(&self) -> bool {
+            self.flag.load(SeqCst)
+        }
+
+        fn wait(&self) {
+            self.wq.wait_until(|| self.test().then_some(()))
+        }
+
+        fn set(&self) {
+            self.flag.store(true, SeqCst);
+            self.wq.wake_all();
+        }
+    }
+
+    pub fn test_priorities() {
+        const WAIT_SECS: u64 = 80;
+        const PRIO: &[u16] = &[115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125];
+        const COUNT: usize = PRIO.len();
+
+        assert!(is_local_enabled());
+
+        struct Data {
+            mutexes: [Mutex<()>; COUNT],
+            start: Barrier,
+            stop: Barrier,
+            counter: [AtomicU64; COUNT],
+        }
+
+        println!("Creating data");
+        let data = Arc::new(Data {
+            mutexes: array::from_fn(|_| Mutex::new(())),
+            start: Barrier::new(),
+            stop: Barrier::new(),
+            counter: array::from_fn(|_| AtomicU64::new(0)),
+        });
+
+        let spawn = |id: usize, prio, data: Arc<Data>| {
+            let func = move || {
+                println!("Spawned #{id}");
+                data.start.wait();
+                while !data.stop.test() {
+                    let idx = read_tsc() as usize % COUNT;
+                    let _lock = data.mutexes[idx].lock();
+                    data.counter[id].fetch_add(1, SeqCst);
+                }
+            };
+
+            Thread::spawn_kernel_thread(
+                ThreadOptions::new(func)
+                    .cpu_affinity(CpuSet::single(this_cpu()))
+                    .priority(prio),
+            )
+        };
+
+        println!("Spawning threads");
+        let threads = PRIO
+            .iter()
+            .enumerate()
+            .map(|(id, &prio)| spawn(id, Priority::new(prio), data.clone()))
+            .collect::<Vec<_>>();
+
+        println!("Waiting for threads");
+        data.start.set();
+        let start = current_tick();
+        loop {
+            let ticks = current_tick() - start;
+            if ticks >= WAIT_SECS * TIMER_FREQ {
+                break;
+            }
+            Thread::yield_now();
+        }
+
+        println!("Stopping threads");
+        data.stop.set();
+        threads.into_iter().for_each(|t| t.join());
+
+        data.counter
+            .iter()
+            .zip(PRIO)
+            .for_each(|(count, &prio)| print!("{}, ", count.load(SeqCst)));
+        println!();
+    }
+}

@@ -17,7 +17,7 @@ regression/ramdisk/initramfs/
 regression/ramdisk/build/
 
 # qemu log file
-qemu.log
+*.log
 
 # packet dump file
 virtio-net.pcap

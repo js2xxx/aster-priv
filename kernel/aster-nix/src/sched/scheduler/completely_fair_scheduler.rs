@@ -109,11 +109,12 @@ impl VRuntime {
         self.vruntime = self.get_with_cur(cur);
         self.start = cur;
 
-        if load == 0 {
-            return true;
-        }
-        let slice = period * self.weight / load;
-        if cur > self.period_start + slice {
+        assert!(load != 0);
+        assert!(period != 0);
+        assert!((cur - self.period_start) * load != 0);
+
+        let slice = period * self.weight;
+        if (cur - self.period_start) * load > slice {
             self.period_start = cur;
             true
         } else {
@@ -266,7 +267,7 @@ impl RunQueue {
             assert!(!is_local_enabled());
             let mut se = cur.sched_entity.lock();
             if let Some(v) = se.get_mut::<VRuntime>() {
-                v.tick(self.load.load(Relaxed), self.period())
+                v.tick(self.load.load(Relaxed) + v.weight, self.period())
             } else {
                 true
             }
@@ -274,12 +275,15 @@ impl RunQueue {
         .unwrap_or(true)
     }
 
-    fn tick(&self) {
+    fn tick(&self, force_yield: bool) {
         with_current(|cur| {
             assert!(!is_local_enabled());
             let mut se = cur.sched_entity.lock();
             if let Some(v) = se.get_mut::<VRuntime>() {
-                if v.tick(self.load.load(Relaxed), self.period()) {
+                if force_yield {
+                    cur.set_need_resched(true);
+                    v.period_start = tsc_clock_ns();
+                } else if v.tick(self.load.load(Relaxed) + v.weight, self.period()) {
                     cur.set_need_resched(true);
                 }
             }
@@ -344,7 +348,7 @@ impl Scheduler for CompletelyFairScheduler {
     }
 
     fn tick_cur_task(&self) {
-        self.cur_rq().tick();
+        self.cur_rq().tick(false);
 
         PACE.with(|pace| {
             let cur_tick = aster_frame::arch::current_tick();
@@ -360,7 +364,7 @@ impl Scheduler for CompletelyFairScheduler {
     }
 
     fn prepare_to_yield_cur_task(&self) {
-        self.tick_cur_task()
+        self.cur_rq().tick(true);
     }
 
     fn prepare_to_yield_to(&self, task: &SchedTask) {
@@ -391,16 +395,27 @@ impl Scheduler for CompletelyFairScheduler {
     fn traverse(&self) {
         with_current(|cur| {
             let cur_tick = aster_frame::arch::current_tick();
+            let (a, b) = tsc_factors();
+
+            let vr_w = |t: &Task| -> u64 { vr(t).weight };
+            let vr_ns = |t: &Task| -> u64 { vr(t).get() * a / b };
+
             println!(
-                "CPU#{} cur_tick = {cur_tick}, cur_task = {:p}({}), num = {}",
+                "CPU#{} cur_tick = {cur_tick}, cur_task = {:p}({}, {}ns)",
                 this_cpu(),
                 cur.as_ptr(),
-                vr(cur).get(),
-                self.cur_rq().num.load(Relaxed)
+                vr_w(cur),
+                vr_ns(cur),
+            );
+            println!(
+                "load = {}, num = {}, period = {}ns",
+                self.cur_rq().load.load(Relaxed),
+                self.cur_rq().num.load(Relaxed),
+                { self.cur_rq().period() * a / b }
             );
             print!("num_ready = ");
-            for r in &*self.cur_rq().normal_tasks.lock() {
-                print!("{:p}({}), ", r, vr(r).get());
+            for t in &*self.cur_rq().normal_tasks.lock() {
+                print!("{:p}({}, {}ns), ", t, vr_w(t), vr_ns(t));
             }
             println!("\n");
         });
