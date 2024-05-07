@@ -30,6 +30,10 @@ pub fn futex_wait_bitset(
     let futex_key = FutexKey::new(futex_addr);
     let (_, futex_bucket_ref) = FUTEX_BUCKETS.get_bucket(futex_key);
 
+    if futex_key.load_val_prefixed() != futex_val {
+        return_errno!(Errno::EAGAIN)
+    }
+
     // lock futex bucket ref here to avoid data race
     let mut futex_bucket = futex_bucket_ref.lock_irq_disabled();
 
@@ -298,13 +302,18 @@ impl FutexKey {
         FutexKey(futex_addr as _)
     }
 
+    fn load_val_prefixed(&self) -> i32 {
+        // FIXME: how to implement a atomic load?
+        // warn!("implement an atomic load");
+        read_val_from_user(self.0).unwrap()
+    }
+
     #[allow(unsafe_code)]
     pub fn load_val(&self) -> i32 {
         // FIXME: how to implement a atomic load?
         // warn!("implement an atomic load");
         let ptr = self.0 as *const core::sync::atomic::AtomicI32;
         atomic::fence(atomic::Ordering::SeqCst);
-        let _: i32 = read_val_from_user(self.0).unwrap();
         let ret = unsafe { (*ptr).load(atomic::Ordering::SeqCst) };
         // let ret = read_val_from_user(self.0).unwrap();
         atomic::fence(atomic::Ordering::SeqCst);

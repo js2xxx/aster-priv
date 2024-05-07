@@ -89,9 +89,9 @@ impl WaitQueue {
                 (timeout.as_micros() as u64 + us_per_tick - 1) / us_per_tick
             };
 
-            add_timeout_list(remaining_ticks, waiter.clone(), |timer_call_back| {
-                let waiter = timer_call_back.data().downcast_ref::<Waiter>().unwrap();
-                waiter.wake_up();
+            let w2 = waiter.clone();
+            add_timeout_list(remaining_ticks, Arc::new(()), move |_| {
+                w2.wake_up();
             })
         });
 

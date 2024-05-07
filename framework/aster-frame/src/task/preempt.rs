@@ -61,25 +61,20 @@ impl PreemptInfo {
 /// A guard to disable preempt.
 #[clippy::has_significant_drop]
 pub struct DisablePreemptGuard {
-    local: DisabledLocalIrqGuard,
+    local: Option<DisabledLocalIrqGuard>,
     marker: PhantomData<*mut ()>,
 }
 
 impl DisablePreemptGuard {
     pub fn new() -> Self {
-        let local = disable_local();
-        PREEMPT_INFO.num.set(PREEMPT_INFO.num.get() + 1);
+        let pi = PREEMPT_INFO.num.get();
+        PREEMPT_INFO.num.set(pi + 1);
+        let local = (pi == 0).then(disable_local);
         atomic::compiler_fence(Acquire);
         Self {
             local,
             marker: PhantomData,
         }
-    }
-
-    /// Transfer this guard to a new guard.
-    /// This guard must be dropped after this function.
-    pub fn transfer_to(&self) -> Self {
-        Self::new()
     }
 }
 

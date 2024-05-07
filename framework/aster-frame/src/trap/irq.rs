@@ -134,12 +134,6 @@ impl DisabledLocalIrqGuard {
             marker: PhantomData,
         }
     }
-
-    /// Transfer the saved IRQ status of this guard to a new guard.
-    /// The saved IRQ status of this guard is cleared.
-    pub fn transfer_to(&mut self) -> Self {
-        Self::new()
-    }
 }
 
 impl Drop for DisabledLocalIrqGuard {

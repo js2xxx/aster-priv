@@ -24,6 +24,7 @@ struct ApBootInfo {
 }
 
 pub(crate) static CPUNUM: Once<u32> = Once::new();
+pub(crate) static BSP: Once<u32> = Once::new();
 
 /// Only initialize the processor number here to facilitate the system
 /// to pre-allocate some data structures according to this number.
@@ -31,6 +32,7 @@ pub(crate) fn init() {
     let processor_info = get_processor_info();
     let num_aps = processor_info.application_processors.len();
     CPUNUM.call_once(|| (num_aps + 1) as u32);
+    BSP.call_once(crate::cpu::this_cpu);
 
     boot_all_aps();
 }

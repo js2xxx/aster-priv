@@ -35,6 +35,16 @@ pub fn init() {
     }
 }
 
+pub fn init_ap() {
+    if is_tsc_deadline_mode_supported() {
+        info!("[Timer]: Enable APIC TSC deadline mode.");
+        init_tsc_mode();
+    } else {
+        info!("[Timer]: Enable APIC periodic mode.");
+        init_periodic_mode();
+    }
+}
+
 pub(super) static APIC_TIMER_CALLBACK: Once<Arc<dyn Fn() + Sync + Send>> = Once::new();
 
 /// Determine if the current system supports tsc_deadline mode APIC timer

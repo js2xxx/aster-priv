@@ -44,6 +44,11 @@ pub(crate) fn mid_init() {
     kernel::pic::init();
 }
 
+pub fn init_ap() {
+    kernel::apic::init_ap();
+    timer::init_ap();
+}
+
 pub(crate) fn after_all_init() {
     mm::init();
     match iommu::init() {
@@ -88,8 +93,4 @@ pub(crate) fn enable_common_cpu_features() {
             *efer |= EferFlags::NO_EXECUTE_ENABLE;
         });
     }
-}
-
-pub fn init_ap() {
-    kernel::apic::init_ap();
 }

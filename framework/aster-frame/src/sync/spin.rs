@@ -34,11 +34,16 @@ impl<T> SpinLock<T> {
 }
 
 impl<T: ?Sized> SpinLock<T> {
+    pub fn is_locked(&self) -> bool {
+        self.lock.load(Ordering::Relaxed)
+    }
+
     /// Acquire the spin lock with disabling the local IRQs. This is the most secure
     /// locking way.
     ///
     /// This method runs in a busy loop until the lock can be acquired.
     /// After acquiring the spin lock, all interrupts are disabled.
+    #[track_caller]
     pub fn lock_irq_disabled(&self) -> SpinLockGuard<T> {
         let guard = disable_local();
         self.acquire_lock();
@@ -49,6 +54,7 @@ impl<T: ?Sized> SpinLock<T> {
     }
 
     /// Try acquiring the spin lock immedidately with disabling the local IRQs.
+    #[track_caller]
     pub fn try_lock_irq_disabled(&self) -> Option<SpinLockGuard<T>> {
         let irq_guard = disable_local();
         if self.try_acquire_lock() {
@@ -69,6 +75,7 @@ impl<T: ?Sized> SpinLock<T> {
     /// holding this lock. For example, if a lock is never used
     /// in the interrupt context, then it is ok to use this method
     /// in the process context.
+    #[track_caller]
     pub fn lock(&self) -> SpinLockGuard<T> {
         self.acquire_lock();
         SpinLockGuard {
@@ -90,11 +97,13 @@ impl<T: ?Sized> SpinLock<T> {
     }
 
     /// Access the spin lock, otherwise busy waiting
+    #[track_caller]
     fn acquire_lock(&self) {
         let mut spin_shift = 0;
+        let mut stuck_count = 0;
         while self
             .lock
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Acquire)
             .is_err()
         {
             for _ in 0..(1 << spin_shift) {
@@ -102,13 +111,22 @@ impl<T: ?Sized> SpinLock<T> {
             }
             if spin_shift < 16 {
                 spin_shift += 1;
+            } else {
+                stuck_count += 1;
+                if stuck_count % 5000 == 0 {
+                    crate::early_println!(
+                        "CPU#{} stuck in {}",
+                        crate::cpu::this_cpu(),
+                        core::panic::Location::caller()
+                    );
+                }
             }
         }
     }
 
     fn try_acquire_lock(&self) -> bool {
         self.lock
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Acquire)
             .is_ok()
     }
 

@@ -53,11 +53,15 @@ pub fn init() {
     TIMER_IRQ.call_once(|| timer_irq);
 }
 
+pub fn init_ap() {
+    apic::init_ap();
+}
+
 pub fn current_tick() -> TickCount {
     TICK.load(Ordering::Acquire)
 }
 
-fn timer_callback(trap_frame: &TrapFrame) {
+fn update_tick_callback() {
     let current_ticks = TICK.fetch_add(1, Ordering::SeqCst);
 
     let callbacks = {
@@ -79,6 +83,13 @@ fn timer_callback(trap_frame: &TrapFrame) {
 
     for callback in callbacks {
         (callback.callback)(&callback);
+    }
+}
+
+fn timer_callback(trap_frame: &TrapFrame) {
+    // crate::early_print!("{}", crate::cpu::this_cpu());
+    if crate::cpu::is_bsp() {
+        update_tick_callback();
     }
 
     if let Some(callback) = APIC_TIMER_CALLBACK.get() {

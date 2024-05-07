@@ -52,7 +52,6 @@ impl<T> Mutex<T> {
     fn unlock(&self) {
         self.release_lock();
         self.queue.wake_one();
-        crate::task::schedule();
     }
 
     fn acquire_lock(&self) -> bool {

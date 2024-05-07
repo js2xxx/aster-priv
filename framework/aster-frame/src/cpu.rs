@@ -30,6 +30,10 @@ pub fn this_cpu() -> u32 {
     unsafe { x86::time::rdtscp().1 }
 }
 
+pub fn is_bsp() -> bool {
+    crate::smp::BSP.get().map_or(true, |&bsp| this_cpu() == bsp)
+}
+
 #[derive(Default)]
 pub struct CpuSet {
     bitset: BitVec,

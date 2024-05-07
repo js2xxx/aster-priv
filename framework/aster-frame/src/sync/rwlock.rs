@@ -497,10 +497,7 @@ impl<'a, T> RwLockUpgradeableGuard<'a, T> {
             Relaxed,
         );
         if res.is_ok() {
-            let inner_guard = match &mut self.inner_guard {
-                InnerGuard::IrqGuard(irq_guard) => InnerGuard::IrqGuard(irq_guard.transfer_to()),
-                InnerGuard::None => InnerGuard::None,
-            };
+            let inner_guard = core::mem::replace(&mut self.inner_guard, InnerGuard::None);
             drop(self);
             Ok(RwLockWriteGuard { inner, inner_guard })
         } else {
