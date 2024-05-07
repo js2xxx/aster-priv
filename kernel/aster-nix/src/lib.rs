@@ -303,8 +303,10 @@ mod tests {
                 data.start.wait();
                 while !data.stop.test() {
                     let idx = read_tsc() as usize % COUNT;
-                    let _lock = data.mutexes[idx].lock();
+                    let lock = data.mutexes[idx].lock();
                     data.counter[id].fetch_add(1, SeqCst);
+                    drop(lock);
+                    aster_frame::task::schedule();
                 }
             };
 
