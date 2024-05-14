@@ -33,6 +33,9 @@ endif
 ifeq ($(AUTO_TEST), sysbench-threads)
 CARGO_OSDK_ARGS += --init_args="-c \"sysbench --time=60 --threads=6 --debug --report-interval=10 --percentile=99 threads run\""
 endif
+ifeq ($(AUTO_TEST), sysbench-cpu)
+CARGO_OSDK_ARGS += --init_args="-c \"sysbench --time=60 --threads=6 --debug --report-interval=10 --percentile=99 cpu run\""
+endif
 
 ifeq ($(RELEASE_MODE), 1)
 CARGO_OSDK_ARGS += --profile release

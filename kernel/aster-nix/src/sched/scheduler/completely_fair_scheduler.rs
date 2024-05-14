@@ -375,13 +375,13 @@ impl Scheduler for CompletelyFairScheduler {
     fn load_balance(&self) {
         if let Some(src) = (self.rq.iter())
             .reduce(|a, b| max_by_key(a, b, |t| t.load.load(Relaxed)))
-            .filter(|rq| rq.load.load(Relaxed) > 0 && rq.num.load(Relaxed) > 2)
+            .filter(|rq| rq.load.load(Relaxed) > 0 && rq.num.load(Relaxed) > 1)
         {
-            let _local = aster_frame::trap::disable_local();
             let target = self.cur_rq();
             if src.cpu != target.cpu {
-                while src.load.load(Relaxed) > target.load.load(Relaxed) + WEIGHT_0
-                    && src.num.load(Relaxed) > 2
+                let _local = aster_frame::trap::disable_local();
+                while src.load.load(Relaxed) > target.load.load(Relaxed)
+                    && src.num.load(Relaxed) > 1
                 {
                     let Some(task) = src.pop(target.cpu) else {
                         break;
